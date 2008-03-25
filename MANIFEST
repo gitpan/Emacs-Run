@@ -2,28 +2,25 @@ Changes
 Makefile.PL
 MANIFEST
 README
-t/00-emacs_version_strings-Emacs-Run.t
-t/01-methods_that_shell_out_to_emacs-Emacs-Run.t
+t/00-emacs_version_strings.t
+t/01-methods_that_shell_out_to_emacs.t
+t/02-alternate_settings_for_shell_output_director.t
 lib/Emacs/Run.pm
-t/dat/home/mockingbird/.emacs
-t/dat/home/nowhereman/.emacs
-t/dat/home/hollowman/.emacs
-t/dat/home/nicesuit/.emacs
-t/dat/home/ghostcowboy/.emacs
-t/dat/home/ghostcowboy/chesterson.txt
-t/dat/home/falsenose/.emacs
-t/dat/home/marshgas/.emacs
-t/dat/home/charlie_mccarthy/.emacs
+t/lib/Emacs/Run/Testorama.pm
 t/dat/tmp/html/defvarsity_el.html
 t/dat/tmp/html/defunnery_el.html
 t/dat/tmp/html/defcustomary_el.html
 t/dat/tmp/html/defconstalert_el.html
 t/dat/arc/text/chesterson.txt
+t/dat/arc/text/chesterson-uc.txt
 t/dat/src/text/chesterson.txt
-t/dat/src/templates/.emacs-3-template
-t/dat/src/templates/.emacs-2-template
 t/dat/src/templates/.emacs-template
+t/dat/src/templates/.emacs-2-template
+t/dat/src/templates/.emacs-3-template
 t/dat/src/templates/.emacs-4-template
+t/dat/src/templates/.emacs-5-template
+t/dat/src/templates/.emacs-6-template
+t/dat/src/templates/.emacs-7-template
 t/dat/usr/lib/nada.el
 t/dat/usr/lib-mock-system/site-start.el
 t/dat/usr/lib-with-default/default.el
@@ -37,7 +34,5 @@ t/dat/usr/lib-target/shadowed.el
 t/dat/usr/lib-alpha/null.el
 t/dat/usr/lib-alpha/payload.el
 t/dat/READTHIS
-
-
 
 META.yml                                 Module meta-data (added by MakeMaker)

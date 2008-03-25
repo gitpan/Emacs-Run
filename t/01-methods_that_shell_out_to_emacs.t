@@ -1,5 +1,6 @@
-# Test file created outside of h2xs framework.
-# Run this like so: `perl Emacs-Run.t'
+# Test file. Run this like so:
+#   perl 01-methods_that_shell_out_to_emacs-Emacs-Run.t
+# or use 'make test'
 #   doom@kzsu.stanford.edu     2008/03/08 06:36:39
 
 use warnings;
@@ -8,18 +9,21 @@ $|=1;
 my $DEBUG = 0;
 use Data::Dumper;
 use File::Copy qw( copy );
+use File::Basename qw( fileparse basename dirname );
 use Test::More;
 use Test::Differences;
 
-use FindBin qw( $Bin ); #
+use FindBin qw( $Bin );
 use lib "$Bin/../lib";
+use lib "$Bin/lib";
+use Emacs::Run::Testorama qw( :all );
 
 my $emacs_found = `emacs --version 2>/dev/null`;
 
 if( not( $emacs_found ) ) {
   plan skip_all => 'emacs was not found in PATH';
 } else {
-  plan tests => 26;
+  plan tests => 27;
 }
 
 use_ok( 'Emacs::Run' );
@@ -102,7 +106,7 @@ my $USR     = "$Bin/dat/usr";
 
 {#7-9
   my $method = "detect_site_init";
-  my $test_name = "Testing $method and so on:";
+  my $test_name = "Testing $method, etc";
 
   my $mock_home = "$Bin/dat/home/falsenose";
   my $code_lib  = "$USR/lib";
@@ -138,7 +142,7 @@ my $USR     = "$Bin/dat/usr";
 
 {#10
   my $method = "get_load_path";
-  my $test_name = "Testing $method, which uses eval_emacs to shell out to emacs";
+  my $test_name = "Testing $method (which uses eval_emacs)";
 
   my $mock_home = "$Bin/dat/home/mockingbird";
   my $code_lib = "$USR/lib";
@@ -175,6 +179,8 @@ my $USR     = "$Bin/dat/usr";
   my $code_lib_alt  = "$USR/lib-alt";
   my $dot_emacs_tpl = "$SRC_LOC/templates/.emacs-2-template";
 
+  # print STDERR "Note: with emacs all variables are global & long names are wise...\n";
+
   my %name_value = (
    'emacs-run-testorama-garudabird-knock-off-i-am-not-a-number-i-am-unique-dammit' =>
      '6',
@@ -194,10 +200,11 @@ my $USR     = "$Bin/dat/usr";
 
   my $er = Emacs::Run->new;
 
-  foreach my $varname (keys %name_value){
+  foreach my $varname (sort keys %name_value){
     my $result = $er->$method( $varname );
     my $expected = $name_value{ $varname };
-    is( $result, $expected, "$test_name: $varname" );
+    my $varlabel = get_short_label_from_name( $varname );
+    is( $result, $expected, "$test_name: $varlabel" );
   }
 }
 
@@ -220,12 +227,13 @@ my $USR     = "$Bin/dat/usr";
   my $funcname = 'emacs-run-testorama-groatcakes-for-greatness-more-grease-please';
   my $expected = 'Hello';
   my $result = $er->$method( $funcname );
-  is( $result, $expected, "$test_name: $funcname" );
+  my $label = get_short_label_from_name( $funcname );
+  is( $result, $expected, "$test_name: $label" );
 }
 
 
 {
-  my $test_name = "Testing get_variable and eval_function for user email and name.";
+  my $test_name = "Testing get_variable and eval_function for user email and name";
 
   my $mock_home     = "$Bin/dat/home/nicesuit";
   my $code_lib      = "$USR/lib";
@@ -248,8 +256,6 @@ my $USR     = "$Bin/dat/usr";
   is( $username, $expected_user,  "$test_name: user"  );
   is( $email,    $expected_email, "$test_name: email" );
 }
-
-
 
 {
   my $test_name = "Testing internal quoting handling on elisp";
@@ -277,10 +283,10 @@ my $USR     = "$Bin/dat/usr";
   my $test_name = "Eval simple elisp with current user's actual emacs init files";
   my $er = Emacs::Run->new;
   my $result = $er->eval_elisp( '(message "yow")' );
-  is( $result, "yow", $test_name );
+  is( $result, "yow", "$test_name: elisp message" );
 
   $result = $er->eval_elisp( '(print (+ 2 2))' );
-  cmp_ok( $result, 'eq', '4', $test_name );
+  cmp_ok( $result, 'eq', '4', "$test_name: plus" );
 }
 
 {
@@ -310,31 +316,72 @@ my $USR     = "$Bin/dat/usr";
 
   my $er = Emacs::Run->new;
 
-  # Make every other word upper-case
+  # Make every other word upper-case - return number of iterations
   my $elisp = q{
+        (let ( (count 0) )
           (while (progn
                    (upcase-word 1) (forward-word 1)
+                   (setq count (+ count 1))
                    (not (looking-at "^$"))))
+           (print count))
     };
+
+  my $ret = $er->run_elisp_on_file( $filename, $elisp, {shell_output_director=>'2>/dev/null' } );
+  print STDERR "ret: $ret\n" if $DEBUG;  # 49
+
+ SKIP: {
+    unless ($ret > 25) {
+      skip "Repeated 'forward-word' counted much less than number of words : weird idea of word chracters?", 1;
+    }
+
+    my ($result, $expected) = slurp_files( $result_file, $expected_file );
+
+    eq_or_diff( $result, $expected,
+                "$test_name: upcase/forward-word on ghostcowboy/chesterson.txt");
+  }
+}
+
+
+{
+  my $test_name = "Testing run_elisp_on_file";
+
+  my $mock_home     = "$Bin/dat/home/penguindust";
+  my $code_lib      = "$USR/lib";
+  my $code_lib_alt  = "$USR/lib-alt";
+  my $dot_emacs_tpl = "$SRC_LOC/templates/.emacs-5-template";
+  my $src           = "$Bin/dat/src/text";
+  my $arc           = "$Bin/dat/arc/text";
+
+  create_dot_emacs_in_mock_home( $mock_home, $code_lib, $code_lib_alt, $dot_emacs_tpl );
+
+  my $test_subject = "chesterson.txt";
+  my $source_file = "$src/$test_subject";
+  my $test_subject_base = ( fileparse( $test_subject, qw{\.txt} ) )[0];
+  my $result_file = "$mock_home/$test_subject_base-uc.txt";
+  my $expected_file = "$arc/$test_subject_base-uc.txt";
+  copy($source_file, $result_file) or die "$!";
+
+  # we will now act on the "result" file
+  my $filename = $result_file;
+
+  # change the environment variable $HOME to point at the $mock_home
+  $ENV{HOME} = $mock_home;
+  echo_home() if $DEBUG;
+
+  my $er = Emacs::Run->new;
+
+  # Make the text upper case
+  my $elisp = q{ (upcase-region (point-min) (point-max)) };
 
   $er->run_elisp_on_file( $filename, $elisp );
 
-  # open each file, slurp in.
-  local $/; # mister slurpie
-  open my $fh, "<", $result_file or die "$!";
-  my $result = <$fh>;
-  close( $fh );
-
-  open $fh, "<", $expected_file or die "$!";
-  my $expected = <$fh>;
-  close( $fh );
+  my ($result, $expected) = slurp_files( $result_file, $expected_file );
 
   eq_or_diff( $result, $expected,
-              "$test_name: checking contents of $result_file");
+              "$test_name: upcase-region on penguindust/chesterson-us.txt");
 }
 
-# Resurrecting a few tests for things in use by Emacs::Run::ExtractDocs
-
+# a few tests for old routines which may still be in use by Emacs::Run::ExtractDocs
 {
   my $method = "generate_elisp_to_load_library";
   my $test_name = "Testing $method on library name";
@@ -407,10 +454,9 @@ my $USR     = "$Bin/dat/usr";
 }
 
 {#23, #24, #25, #26
-  my $test_name = "Testing lib_data attribute with type 'lib' using get_variable.";
-  ## start with a simple load-path, then load an elisp library
-  ## that adds another location, which will is used to load
-  ## other libraries.
+  my $test_name = "Testing lib_data w/type 'lib' using get_variable";
+  # start with a simple load-path, then load an elisp library
+  # that adds another location, which is then used to load other libraries.
 
   my $mock_home     = "$Bin/dat/home/charlie_mccarthy";
   my $code_lib      = "$USR/lib-load-path-munge";
@@ -441,9 +487,10 @@ my $USR     = "$Bin/dat/usr";
 
   my $varname = 'emacs-run-testorama-shadow';
   my $value    = $er->get_variable( $varname );
+  my $label = get_short_label_from_name( $varname );
 
   my $expected  = "Barnabas";
-  is( $value, $expected,  "$test_name: $varname : $value"  );
+  is( $value, $expected,  "$test_name: $label: $value"  );
 
   #24 -- without "my_load_path.el", we find a different shadowed.el
   $lib_data = [
@@ -457,16 +504,17 @@ my $USR     = "$Bin/dat/usr";
                            );
 
   $varname = 'emacs-run-testorama-shadow';
-  $value    = $er->get_variable( $varname );
+  $label = get_short_label_from_name( $varname );
 
+  $value     = $er->get_variable( $varname );
   $expected  = "Lamont";
-  is( $value, $expected,  "$test_name: $varname : $value"  );
+  is( $value, $expected,  "$test_name: $label: $value"  );
 
 
   #25 -- type "file" adds it's location to load-path,
   #      enables a search for still another lib
-  $test_name = "Testing that lib_data with type 'file' effects load-path.";
-  print STDERR "\nYou may see some odd messages relating to null.el.  They can be ignored.\n";
+  $test_name = "Testing type 'file' side-effect on load-path";
+  # print STDERR "\nYou may see some odd messages relating to null.el.  They can be ignored.\n";
   $lib_data = [
                   ["$USR/lib-alpha/null.el",
                     { type=>'file', priority=>'requested' }],
@@ -482,89 +530,23 @@ my $USR     = "$Bin/dat/usr";
 
   $varname = 'emacs-run-testorama-kandor';
   $value    = $er->get_variable( $varname );
+  $label = get_short_label_from_name( $varname );
 
   $expected  = "Keep it bottled up.";
-  is( $value, $expected,  "$test_name: $varname : $value"  );
+  is( $value, $expected,  "$test_name: $label: $value"  );
 
   #26 - use simpler emacs_libs rather than explicit lib_data
   # A replay of a test above: "a shadowed.el exits in both
   # lib-target and lib-load-path-munge.  they both define the
   # variable "*-shadow" as different strings."
-  $test_name = "Testing that emacs_libs works also.";
+  $test_name = "Testing that emacs_libs works, also";
   $er = Emacs::Run->new ( { emacs_libs => [ 'my-load-path', 'shadowed'], } );
 
   $varname = 'emacs-run-testorama-shadow';
+  $label = get_short_label_from_name( $varname );
+
   $value    = $er->get_variable( $varname );
 
   $expected  = "Barnabas";
-  is( $value, $expected,  "$test_name: $varname : $value"  );
+  is( $value, $expected,  "$test_name: $label: $value"  );
 }
-
-
-
-
-
-# ========
-# ========
-# end main, into the subs
-
-# trims leading and trailing whitespace on multi-line text.
-# eliminates blank lines.
-# this is used to make it eaisier to compare generated and expected elisp
-sub clean_whitespace {
-  my $text = shift;
-  my $output;
-  my @lines = split /\n/, $text;
-  foreach my $line (@lines) {
-    $line =~ s{^\s+}{}xms;
-    $line =~ s{\s+$}{}xms;
-    next if ($line =~ m{^ \s* $}xms);
-    $output .= "$line\n";
-  }
-  return $output;
-}
-
-# create a .emacs for $mock_home
-sub create_dot_emacs_in_mock_home {
-  my $mock_home     = shift;
-  my $code_lib      = shift;
-  my $code_lib_alt  = shift;
-  my $dot_emacs_tpl = shift;
-
-  if ($DEBUG) {
-    print STDERR "mock_home: $mock_home\n";
-    print STDERR "code_lib: $code_lib\n";
-    print STDERR "code_lib_alt: $code_lib_alt\n";
-    print STDERR "dot_emacs_tpl: $dot_emacs_tpl\n";
-  }
-
-  # read in template used to create a mock .emacs
-  open my $fh_in, "<", $dot_emacs_tpl
-    or die "Could not open $dot_emacs_tpl for read:$!";
-
-  my $slurpie;
-  {
-    undef $/;
-    $slurpie =<$fh_in>;
-  }
-
-  # munge template placeholders XXX and YYY with mock library locations.
-  $slurpie =~ s{XXX}{$code_lib}xmsg;
-  $slurpie =~ s{YYY}{$code_lib_alt}xmsg;
-
-  # output the mock .emacs file in the mock home directory
-  my $dot_emacs = "$mock_home/.emacs";
-  open my $fh_out, ">", $dot_emacs
-    or die "Could not open $dot_emacs for read:$!";
-
-  print {$fh_out} $slurpie;
-  close($fh_out);
-
-  return $dot_emacs;
-}
-
-
-sub echo_home {
-  print STDERR "HOME is now: $ENV{HOME}\n";
-}
-

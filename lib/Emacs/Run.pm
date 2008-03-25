@@ -86,7 +86,7 @@ use List::Util      qw( first );
 use Env             qw( $HOME );
 use List::MoreUtils qw( any );
 
-our $VERSION = '0.02';
+our $VERSION = '0.03';
 my $DEBUG = 0;
 
 # needed for accessor generation
@@ -105,21 +105,55 @@ to the names of the object attributes. These attributes are:
 
 =item emacs_path
 
-By default, this code looks for an external program in the
-PATH envar called 'emacs'.  If you have multiple emacsen
-installed in different places and/or under different names,
-you can choose which one will be used by setting this
-attribute.
+By default, this code looks for an external program called 'emacs' in a
+location listed in the shell's PATH environment variable.  If you have
+multiple emacsen installed in different places and/or under different
+names, you can choose which one will be used by setting this attribute.
 
-=item emacs_version
+=item shell_output_director
 
-The version of emacs in use.  Set automatically by the
-"probe_emacs_version" method during object initialization.
+The B<shell_output_director> (sometimes called B<sod> for short) is a
+string appended to all of the internally generated emacs invocation
+commands to control what happens to output.  This is object attribute
+is the value used by the elisp evaluation methods documented below,
+unless another value is specified.
 
-=item emacs_type
+Most methods here accept a hash reference of options that can include
+their own B<shell_output_director> setting.
 
-The flavor of emacs in use, e.g. 'Gnu Emacs'.  Set automatically by
-the "probe_emacs_version" method during object initialization.
+Typical values are:
+
+=over
+
+=item  '2>&1'
+
+Intermix STDOUT and STDERR  (in elisp: both "message" and "print" functions work).
+This is the default setting for this object attribute.
+
+=item  '2>/dev/null'
+
+return only STDOUT, throwing away STDERR  (in elisp: get output only from "print")
+
+=item  "> $file 2>&1"
+
+send all output to the file $file
+
+=item  ">> $file 2>&1"
+
+append all output to the file $file, preserving any existing content.
+
+=item  "2 > $log_file"
+
+return only STDOUT, but save STDERR to $log_file
+
+=back
+
+=item before_hook
+
+A string inserted into the built-up emacs commands immediately
+after "--batch", but before any thing else is executed.
+This is a good place to insert additional invocation options
+such as "--multibyte" or "--unibyte".
 
 =item load_emacs_init
 
@@ -150,13 +184,31 @@ automatically.  This is provided as a convenience for quick use.
 To take full control over how your emacs libraries are handled,
 see L</lib_data>.
 
+=item default_priority
+
+The global default for how all the emacs libraries should be loaded.
+Normally this is set to "requested", but it can be set to "needed".
+
+A 'requested' library will be silently skipped if it is not available
+(and any elisp code using it may need to do something like 'featurep'
+checks to adapt to it's absence).  A 'needed' file will cause an error
+to occur if it is not available.  Note: this error does not occur
+during object instantiation, but only after a method is called that
+needs to load the libraries (e.g. L</eval_function> L</get_variable>,
+L</eval_elisp>, L</run_elisp_on_file>, etc).
+
 =item lib_data
 
-This is a more complicated data structure than L</emacs_libs>: an
-array of arrays of two elements each, the first element is the
-library name (a string, with or without path), the second element
-is a hash of library attributes: 'priority' which can be 'requested' or
-'needed' and 'type' which can be 'file' or 'lib'.
+This is a more complicated data structure than L</emacs_libs> which is
+the preferred interface to use for most uses.  Essentially, B<lib_data>
+is the internal representation that </emacs_libs> is converted into,
+but the client programmer is provided access to it to cover any
+unusual needs.
+
+The structure of B<lib_data> is an array of arrays of two elements each,
+the first element is the library name (a string, with or without path),
+the second element is a hash of library attributes: 'priority' which can
+be 'requested' or 'needed' and 'type' which can be 'file' or 'lib'.
 
 Example:
 
@@ -172,37 +224,44 @@ emacs library attributes:
 
 =item priority
 
-A 'requested' library will be silently skipped if it is not
-available (and any elisp code using it may need to do something
-like 'featurep' checks to adapt to it's absence).  A 'needed' file
-will cause an error to occur if it is not available.  The default
-priority is 'requested', but that can be changed via the L</default_priority>
-attribute.
+A 'requested' library will be silently skipped if it is not available,
+but a 'needed' file will cause an error to occur if it is not available.
+The default priority is 'requested', but that can be changed via the
+L</default_priority> attribute.  See L</default_priority> for more
+details.
 
 =item type
 
 A library of type 'file' should be a filesystem path to a file
-containing a library of emacs lisp code.  A library of type 'lib'
-is specified by just the basename of the file (sans path or extension),
-and we will search for it looking in the places specified in the emacs
-variable load-path.  If neither is specified, the system will
-guess the lib is a file if it looks like it has a path and/or extension.
+containing a library of emacs lisp code.  A library of type 'lib' is
+specified by just the basename of the file (sans path or extension), and
+we will search for it looking in the places specified in the emacs
+variable load-path.  When neither is specified, this module guesses the
+lib is a file if it looks that way (i.e it has a path and/or extension).
 
 =back
 
-If both lib_data and emacs_libs are used, the lib_data libraries
-are loaded first, followed by the emacs_libs libraries.
+If both B<lib_data> and B<emacs_libs> are used, the B<lib_data> libraries
+are loaded first, followed by the B<emacs_libs> libraries.
 
-=item default_priority
+=over
 
-Normally this is set to "requested", but it can be set to "needed".
+=back
 
-=item before_hook
+These attributes are used to supply data to the client programmer
+(i.e. they're intended to be regarded as read-only):
 
-A string inserted into the built-up emacs commands immediately
-after "--batch", but before any other pieces are executed.
-This is a good place to insert additional invocation options
-such as "--multibyte" or "--unibyte".
+=over
+
+=item emacs_version
+
+The version number of emacs in use: this is set automatically by the
+"probe_emacs_version" method during object initialization.
+
+=item emacs_type
+
+The flavor of emacs in use, e.g. 'Gnu Emacs'.  Set automatically by
+the "probe_emacs_version" method during object initialization.
 
 =back
 
@@ -252,8 +311,8 @@ sub init {
                        default_priority
 
                        before_hook
-
                        ec_lib_loader
+                       shell_output_director
                       );
 
   foreach my $field (@attributes) {
@@ -261,8 +320,7 @@ sub init {
     $self->{ $field } = $args->{ $field };
   }
 
-  ## Define attributes (apply defaults, etc)
-
+  # Define attributes (apply defaults, etc)
   $self->{ec_lib_loader} = '';
 
   # If we weren't given a path, let the $PATH sort it out
@@ -291,6 +349,8 @@ sub init {
 
   $self->{ default_priority } ||= 'requested';
 
+  $self->{ shell_output_director } ||= '2>&1'; # intermix STDOUT and STDERR by default
+
   # preserving any given lib_data in the event of a need to reset.
   $self->{lib_data_initial} = $self->{ lib_data };
 
@@ -312,18 +372,25 @@ user's .emacs, if it can be found) as a reference to a perl array.
 Changing the $HOME environment variable before running this method
 results in loading the .emacs file located in the new $HOME.
 
+Uses the object's L</shell_output_director> by default, but an
+overide value can be specified in an options hash reference.
+
 =cut
 
 sub get_load_path {
   my $self = shift;
+  my $opts = shift;
+  my $sod =
+    $opts->{ shell_output_director } || $self->shell_output_director;
 
   my $elisp = q{ (message (mapconcat 'identity load-path "\n")) };
-  my $return = $self->eval_elisp( $elisp );
+  my $return = $self->eval_elisp( $elisp, {
+                                           shell_output_director => $sod,
+                                          } );
 
   my @load_path = split /\n/, $return;
   \@load_path;
 }
-
 
 =item get_variable
 
@@ -339,25 +406,40 @@ the "load-path" variable might look like:
 
   ("/home/grunt/lib" "/usr/lib/emacs/site-lisp" "/home/xtra/lib")
 
-The returned output includes just STDOUT and not STDERR,
-(but this behavior is under revision, and may change shortly TODO).
+By default the returned output includes just STDOUT and not STDERR
+(and the object attribute L</shell_output_director> is ignored),
+but this behavior can be overridden by setting a field named
+B<shell_output_director> in the options hashref.
+
+An example of that usage:
+
+  my $returned_string =
+    $er->get_variable( 'user-mail-address', {
+                                              shell_output_director => '2>&1',
+                                            } );
 
 =cut
 
 sub get_variable {
   my $self    = shift;
   my $varname = shift;
+  my $opts    = shift;
+  my $sod = $opts->{ shell_output_director } || '2>/dev/null';
   my $subname = ( caller(0) )[3];
 
   my $elisp = qq{ (print $varname) };
 
-#  my $return = $self->eval_elisp( $elisp );
-  my $return = $self->eval_elisp_skip_err( $elisp );
+  my $return;
+  if ($sod) {
+    $return = $self->eval_elisp( $elisp, {
+                                           shell_output_director => $sod,
+                                          } );
+  } else {
+    $return = $self->eval_elisp_skip_err( $elisp );  # backwards compatibility.  remove? TODO
+  }
 
   return $return;
 }
-
-
 
 =item eval_function
 
@@ -369,21 +451,49 @@ is found).
 As with L</get_variable>, this uses the emacs 'print'
 function internally.
 
-The returned output includes just STDOUT and not STDERR,
-(but this behavior is under revision, and may change shortly TODO).
+By default the returned output includes just STDOUT and not STDERR
+(and the object attribute L</shell_output_director> is ignored),
+but this behavior can be overridden by setting a field named
+B<shell_output_director> in the options hashref.
 
+TODO at present, the given function is evaluated without
+arguments.  A future version may allow the use of an
+optional array reference of scalar arguments...
 
 =cut
 
 sub eval_function {
-  my $self = shift;
+  my $self     = shift;
   my $funcname = shift;
+  my $arg2     = shift;
   my $subname = ( caller(0) )[3];
 
-  my $elisp = qq{ (print ($funcname)) };
+  my ($passthroughs, $opts, $passthru);
+  if (ref( $arg2 ) eq 'ARRAY') {
+    $passthroughs = $arg2;
+    $passthru = join " ", map{ qq{"$_"} } @{ $passthroughs };
+    $opts = shift;
+  } elsif (ref( $arg2 ) eq 'HASH') {
+    $opts     = $arg2;
+  }
 
-#  my $return = $self->eval_elisp( $elisp );
-  my $return = $self->eval_elisp_skip_err( $elisp );
+  my $sod = $opts->{ shell_output_director } || '2>/dev/null';
+
+  my $elisp;
+  if( $passthru ) {
+    $elisp = qq{ (print ($funcname $passthru)) };
+  } else {
+    $elisp = qq{ (print ($funcname)) };
+  }
+
+  my $return;
+  if ($sod) {
+    $return = $self->eval_elisp( $elisp, {
+                                           shell_output_director => $sod,
+                                          } );
+  } else {
+    $return = $self->eval_elisp_skip_err( $elisp );  # backwards compatibility.  remove? TODO
+  }
 
   return $return;
 }
@@ -392,63 +502,13 @@ sub eval_function {
 
 =head2 running elisp
 
-=over
+These are a set of general methods that run pieces of
+emacs lisp code in different ways.
 
-=item run_elisp_on_file
+The detailed behavior of these methods have a number of things
+in common:
 
-Given a file name, and some emacs lisp code (which presumably
-modifies the current buffer), this method opens the file, runs
-the code on it, and then saves the file.
-
-Example usage:
-  $self->run_elisp_on_file( $filename, $elisp );
-
-=cut
-
-sub run_elisp_on_file {
-  my $self     = shift;
-  my $filename = shift;
-  my $elisp    = shift;
-  my $subname  = ( caller(0) )[3];
-
-  $elisp = $self->quote_elisp( $elisp );
-
-  my $emacs       = $self->emacs_path;
-  my $before_hook = $self->before_hook;
-
-  # Covering a gnu emacs 21 stupidity: need "--no-splash"
-  if ( $self->emacs_major_version eq '21' &&
-       $self->emacs_type eq 'GNU Emacs' ) {
-    $before_hook .= ' --no-splash ';
-  }
-
-  my $ec_head = qq{ $emacs --batch $before_hook --file='$filename' };
-
-  my $ec_tail = qq{ --eval "$elisp" -f save-buffer 2>&1 };
-
-  my $ec_lib_loader = $self->ec_lib_loader;
-
-  my $emacs_cmd = "$ec_head $ec_lib_loader $ec_tail";
-
-  $self->debug("$subname: emacs_cmd: $emacs_cmd");
-
-  my $return = qx{ $emacs_cmd };
-  $return = $self->clean_return_value( $return );
-
-  $self->debug( "$subname return:\n===\n$return\n===\n" );
-
-  return $return;
-}
-
-=item eval_elisp
-
-Given a string containing a chunk of elisp code this method runs
-it by invoking emacs in batch mode.
-
-(TODO this discussion should be moved to a place that describes
-the entire group of methods that work similarly.)
-
-By default, this method first loads the user's initialization
+By default the method first loads the user's initialization
 file ("$HOME/.emacs") if it can be found.  It will also try to
 load the libraries listed in the L</emacs_libs> and/or
 L</lib_data> attributes.
@@ -458,13 +518,21 @@ loading any of the various init files.  See L</new> for the full
 list.  In particular, if the L</load_emacs_init> attribute has
 been turned off, it will not try to load the .emacs file.
 
-This method returns the output from the elisp code with
-STDOUT and STDERR mixed together (but this behavior
-is under revision, and may change shortly TODO).
-
+Unless specified otherwise, the methods return the
+output from the elisp code with STDOUT and STDERR
+mixed together, though this can be overridden with the
+shell_output_director field of an options hashref.
 (The advanatage of intermixing STDOUT and STDERR is that the
 emacs functions 'message' and 'print' both work to generate
-output.)
+output. The disadvantage is that you may have inane messages
+from emacs sent to STDERR such as 'Loading library so-and-so'.
+
+=over
+
+=item eval_elisp
+
+Given a string containing a chunk of elisp code this method runs
+it by invoking emacs in batch mode.
 
 Example:
 
@@ -475,18 +543,21 @@ Example:
 sub eval_elisp {
   my $self  = shift;
   my $elisp = shift;
-  my $subname = ( caller(0) )[3];
+  my $opts     = shift;
+  my $subname  = ( caller(0) )[3];
+
+  my $sod =
+    $opts->{ shell_output_director } || $self->shell_output_director;
+
   $elisp = $self->quote_elisp( $elisp );
 
   my $emacs = $self->emacs_path;
   my $before_hook = $self->before_hook;
 
   my $ec_head = qq{ $emacs --batch $before_hook };
-  my $ec_tail = qq{ --eval "$elisp" 2>&1 };
-
+  my $ec_tail = qq{ --eval "$elisp" };
   my $ec_lib_loader = $self->set_up_ec_lib_loader;
-
-  my $emacs_cmd = "$ec_head $ec_lib_loader $ec_tail";
+  my $emacs_cmd = "$ec_head $ec_lib_loader $ec_tail $sod";
 
   $self->debug("$subname: emacs_cmd:\n $emacs_cmd\n");
 
@@ -501,8 +572,12 @@ sub eval_elisp {
 
 =item eval_elisp_skip_err
 
-Identical to L</eval_elisp>, except that it returns only
+Similar to L</eval_elisp>, except that it always returns only
 the standard output, ignoring any messages sent to STDERR.
+
+This is essentially for backwards compatibility, though it
+might be useful as a convenience method to avoid sodding about
+with the L</shell_output_director>.
 
 =cut
 
@@ -517,9 +592,7 @@ sub eval_elisp_skip_err {
 
   my $ec_head = qq{ $emacs --batch $before_hook };
   my $ec_tail = qq{ --eval "$elisp" };
-
   my $ec_lib_loader = $self->set_up_ec_lib_loader;
-
   my $emacs_cmd = "$ec_head $ec_lib_loader $ec_tail";
 
   $self->debug("$subname: emacs_cmd:\n $emacs_cmd\n");
@@ -532,21 +605,75 @@ sub eval_elisp_skip_err {
   return $return;
 }
 
+=item run_elisp_on_file
+
+Given a file name, and some emacs lisp code (which presumably
+modifies the current buffer), this method opens the file, runs
+the code on it, and then saves the file.
+
+Returns whatever value the elisp returns.
+
+Example usage:
+  $self->run_elisp_on_file( $filename, $elisp );
+
+=cut
+
+sub run_elisp_on_file {
+  my $self     = shift;
+  my $filename = shift;
+  my $elisp    = shift;
+  my $opts     = shift;
+  my $subname  = ( caller(0) )[3];
+
+  my $sod =
+    $opts->{ shell_output_director } || $self->shell_output_director;
+
+  $elisp = $self->quote_elisp( $elisp );
+
+  my $emacs       = $self->emacs_path;
+  my $before_hook = $self->before_hook;
+
+  # Covering a gnu emacs 21 stupidity: need "--no-splash"
+  if ( $self->emacs_major_version eq '21' &&
+       $self->emacs_type eq 'GNU Emacs' ) {
+    $before_hook .= ' --no-splash ';
+  }
+
+  my $ec_head = qq{ $emacs --batch $before_hook --file='$filename' };
+  my $ec_tail = qq{ --eval "$elisp" -f save-buffer };
+  my $ec_lib_loader = $self->ec_lib_loader;
+  my $emacs_cmd = "$ec_head $ec_lib_loader $ec_tail $sod";
+
+  $self->debug("$subname: emacs_cmd: $emacs_cmd");
+
+  my $return = qx{ $emacs_cmd };
+  $return = $self->clean_return_value( $return );
+
+  $self->debug( "$subname return:\n===\n$return\n===\n" );
+
+  return $return;
+}
 
 
 =back
 
-=head2 utility methods (largely, but not entirely for internal use)
+=head1 internal methods
+
+The following methods are intended primarily for internal use.
+
+Note: the common "leading underscore" naming convention is not used here.
+
+=head2 utility methods
 
 =over
 
 =item quote_elisp
 
-Routine to quote elisp code before feeding it into an emacs
-batch shell command.  Used internally by L</eval_elisp>.
+Routine to quote elisp code before feeding it into an emacs batch
+shell command.  Used internally by methods such as L</eval_elisp>.
 
-This just adds a single backslash to all the double-quote
-characters (an empirically determined algorithm, i.e. hack).
+This just adds a single backslash to all the double-quote characters
+(essentially an empirically determined algorithm, i.e. hack).
 
 Example usage:
 
@@ -610,7 +737,7 @@ sub clean_return_value {
 
 =back
 
-=head1 internal methods
+=head2 initialization phase methods
 
 The following routines are largely used internally in the
 object initialization phase.
@@ -1413,15 +1540,15 @@ sub AUTOLOAD {
 
 =head2 MOTIVATION
 
-Periodically, I get interested in the strange world of
-running emacs code from perl.  There's a mildly obscure
-feature of emacs command line invocations called "--batch"
-that lets one use it non-interactively, and a number of other
-command-line options to load files of elisp code or run
-snippets of code from the command-line.
+Periodically, I find myself interested in the strange world of
+running emacs code from perl.  There's a mildly obscure feature of
+emacs command line invocations called "--batch" that essentially
+transforms emacs into an unusual lisp interpreter: other command-line
+options allow one to load files of elisp code and run pieces of code
+from the command-line.
 
-You might think that there isn't much use for this trick,
-but I can think of many reasons:
+You might think that there aren't many uses for this trick,
+but I've found several of them.  You can use it to:
 
 =over
 
@@ -1433,9 +1560,9 @@ but I can think of many reasons:
 
 =back
 
-Emacs command line invocation is a little language all of it's own,
-with just enough twists and turns to it that I've felt the need to
-write perl routines to help drive the process.
+This emacs command line invocation is a little language all of it's
+own, with just enough twists and turns to it that I've felt the need
+to write perl routines to help drive the process.
 
 =head2 emacs invocation vs Emacs::Run
 
@@ -1444,10 +1571,10 @@ files (but does load the essentially deprecated "site-start.pl",
 presumably for backwards compatibility).  Emacs::Run has the opposite
 bias: here we try to load all three of the types of init files, if
 they're available, though each one of these can be shut-off
-individually if so desired.  This is because one of the main things
-this code is for is to let perl find out about things such as the
-user's emacs load-path settings (and in any case, the performance hit
-of loading these files is no-longer such a big deal).
+individually if so desired.  This is because one of the main intended
+uses is to let perl find out about things such as the user's emacs
+settings (notably, the B<load-path>).  And in any case, the performance
+hit of loading these files is no-longer such a big deal.
 
 =head1 internal documentation (how the code works, etc).
 
@@ -1478,21 +1605,42 @@ previously found.  Without some place to store intermediate results
 in some form, this process might need to be programmed as one large
 monolithic routine.
 
+=item lib_data_initial
+
+The initial setting of L</lib_data> when the object is instantiated.
+As currently implemented, some operations here require resetting
+the state of L</lib_data> and re-building it.  This attribute
+facilitates that process.
+
 =back
 
 =head2 strategies in shelling out
 
-Perl has a good feature for running a shell command and capturing
-the output: qx{} (aka back-quotes), and it's easy enough to append
-"2>&1" to a shell command when you'd like to see the STDERR messages
-intermixed with the STDOUT. However, there does not appear to be any
-simple method of distinguishing between the messages from STDERR and
-STDOUT later; so, this project almost always works with them intermixed.
+Perl has a good feature for running a shell command and capturing the
+output: qx{} (aka back-quotes), and it's easy enough to append "2>&1"
+to a shell command when you'd like to see the STDERR messages
+intermixed with the STDOUT.  This module's methods typically default
+to capturing all output like this and returning STDOUT and STDERR
+intermixed like this (though it's perhaps unfortunate that there is no
+good way to distinguishing between the messages from STDERR and STDOUT
+later)
 
-The method L</eval_elisp> intermixes, though there's an alternate form
-L</eval_elisp_skip_err> that only returns STDOUT.
+From the elisp side, it's important to know that in "--batch" mode,
+the elisp function message sends output to STDERR, and you need to use
+the elisp function print if you'd like to send output to STDOUT.
+Perhaps unfortunately, the print function also brackets all output
+with double-quotes and newlines -- the Emacs::Run module compensates by
+unceremoniously stripping these things using the L/<clean_return_value> routine.
 
-=head1 NOTES
+Note: the reasoning behind intermixing by default is that this
+batch-mode behavior of message and print is slightly obscure, even to
+an elisp programmer: returning I<everything> by default is more likely
+to result in code that Just Works.
+
+A new feature with the 0.3 release is the L</shell_output_director>
+attribute (plus the addition of a method-specific options to override
+that object-wide suggested default).  This provides the user with
+finer-grained control over how output is handled.
 
 =head2 loaded vs. in load-path
 
@@ -1504,9 +1652,10 @@ the objects defined in the file become available for use.  It is also possible
 to load a file by telling emacs the path and filename, and that works
 whether or not it is located in the load-path.
 
-There I<is> at least a slight difference between the two,
-however.  For example, the "extract-docstrings.el" package
-contains code like this, that will break in the later case:
+There I<is> at least a slight difference between the two, however.
+For example, the present version of the "extract-docstrings.el"
+library (see L<Emacs::Run::ExtractDocs>) contains code like this, that
+will break if it is not in the load-path:
 
   (setq codefile (locate-library library))
 
@@ -1518,9 +1667,10 @@ to the load-path as well as just loading it.
 
 Emacs::Run tries to use the user's normal emacs init process even
 though it runs non-interactively.  Unfortunately, it's possible that
-the init files may need to be cleaned up in order to run non-interactively.
-In my case I found that I needed to check the "x-no-window-manager" variable
-and selectively disable some code that sets X fonts for me:
+the init files may need to be cleaned up in order to be used
+non-interactively.  In my case I found that I needed to check the
+"x-no-window-manager" variable and selectively disable some code that
+sets X fonts for me:
 
   ;; We must do this check to allow "emacs --batch -l .emacs" to work
   (unless (eq x-no-window-manager nil)
@@ -1529,6 +1679,11 @@ and selectively disable some code that sets X fonts for me:
 =head1 TODO
 
 =over
+
+=item *
+
+The method L</eval_function> should really pass through any arguments
+to the function.
 
 =item *
 
@@ -1547,7 +1702,7 @@ filename containing a double-quote will probably crash things.
 
 =item *
 
-Add a method to match a emacs regexp against a string. See:
+Add a method to match an emacs regexp against a string. See:
 L<http://obsidianrook.com/devnotes/talks/test_everything/bin/1-test_emacs_regexps.t.html>
 
       (goto-char (point-min))
@@ -1558,13 +1713,6 @@ L<http://obsidianrook.com/devnotes/talks/test_everything/bin/1-test_emacs_regexp
 
 In L</run_elisp_on_file>, add support for skipping to a line number
 after opening a file
-
-=item *
-
-Provide additional methods such as L</eval_elisp_skip_err> to allow
-the client coder more choice about whether STDOUT and STDERR will be
-returned intermixed.  Possibly: provide a facility to send STDERR to
-a log file, rather than capture it
 
 =back
 
