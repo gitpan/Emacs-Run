@@ -2,10 +2,6 @@
 # Run this like so: `perl Emacs-Run.t'
 #   doom@kzsu.stanford.edu     2008/03/08 06:36:39
 
-#      ***dev_location***
-#
-# /home/doom/End/Cave/EmacsPerl/Wall/Emacs-Run/lib
-
 use warnings;
 use strict;
 $|=1;
@@ -13,15 +9,20 @@ my $DEBUG = 0;
 use Data::Dumper;
 use File::Copy qw( copy );
 use Test::More;
-BEGIN { plan tests => 26 };
 use Test::Differences;
 
 use FindBin qw( $Bin ); #
 use lib "$Bin/../lib";
 
-BEGIN {#1
-  use_ok( 'Emacs::Run' );
+my $emacs_found = `emacs --version 2>/dev/null`;
+
+if( not( $emacs_found ) ) {
+  plan skip_all => 'emacs was not found in PATH';
+} else {
+  plan tests => 26;
 }
+
+use_ok( 'Emacs::Run' );
 
 ok(1, "Traditional: If we made it this far, we're ok."); #2
 

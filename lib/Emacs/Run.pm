@@ -86,7 +86,7 @@ use List::Util      qw( first );
 use Env             qw( $HOME );
 use List::MoreUtils qw( any );
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 my $DEBUG = 0;
 
 # needed for accessor generation
@@ -142,28 +142,6 @@ init file).
 
 A convenience flag, used to disable all three types of emacs init
 files in one step when set to a true value.  Overrides the other three.
-
-=item requested_libs
-
-A list (aref) of elisp library names that the system will attempt
-to load if they can be found (by searching the load-path).
-E.g. "dired"
-
-=item requested_elisp_files
-
-A list (aref) of elisp library file names (with paths) that
-the system will attempt to load if they exist on the file
-system.  E.g. "~/lib/my-dired-helper.el"
-
-=item needed_libs
-
-Like "requested_libs", except that the system throws an error
-if a library can not be found.
-
-=item needed_elisp_files
-
-Like "requested_elisp_files", except that the system throws an error
-if a library can not be found.
 
 =item emacs_libs
 
@@ -268,13 +246,9 @@ sub init {
                        load_default_init
                        load_no_inits
 
-                       needed_libs
-                       needed_elisp_files
-                       requested_libs
-                       requested_elisp_files
-
                        emacs_libs
                        lib_data
+                       lib_data_initial
                        default_priority
 
                        before_hook
@@ -292,7 +266,7 @@ sub init {
   $self->{ec_lib_loader} = '';
 
   # If we weren't given a path, let the $PATH sort it out
-  $self->set_emacs_path('emacs') unless $self->emacs_path;
+  $self->set_emacs_path('emacs') unless $self->{ emacs_path };
 
   # Determine the emacs version if we haven't been told already
   my $emacs_version =
@@ -317,8 +291,11 @@ sub init {
 
   $self->{ default_priority } ||= 'requested';
 
+  # preserving any given lib_data in the event of a need to reset.
+  $self->{lib_data_initial} = $self->{ lib_data };
+
   if( defined( my $emacs_libs = $self->{ emacs_libs } ) ) {
-    $self->process_emacs_libs( $emacs_libs );
+    $self->process_emacs_libs_addition( $emacs_libs );
   }
 
   $self->set_up_ec_lib_loader;
@@ -362,6 +339,9 @@ the "load-path" variable might look like:
 
   ("/home/grunt/lib" "/usr/lib/emacs/site-lisp" "/home/xtra/lib")
 
+The returned output includes just STDOUT and not STDERR,
+(but this behavior is under revision, and may change shortly TODO).
+
 =cut
 
 sub get_variable {
@@ -389,7 +369,9 @@ is found).
 As with L</get_variable>, this uses the emacs 'print'
 function internally.
 
-The returned output intermixes STDOUT and STDERR.
+The returned output includes just STDOUT and not STDERR,
+(but this behavior is under revision, and may change shortly TODO).
+
 
 =cut
 
@@ -400,7 +382,8 @@ sub eval_function {
 
   my $elisp = qq{ (print ($funcname)) };
 
-  my $return = $self->eval_elisp( $elisp );
+#  my $return = $self->eval_elisp( $elisp );
+  my $return = $self->eval_elisp_skip_err( $elisp );
 
   return $return;
 }
@@ -410,7 +393,6 @@ sub eval_function {
 =head2 running elisp
 
 =over
-
 
 =item run_elisp_on_file
 
@@ -460,25 +442,29 @@ sub run_elisp_on_file {
 
 =item eval_elisp
 
-Given string containing a chunk of elisp code this method
-runs it by invoking emacs in batch mode, by default first
-loading the user's initialization file ("$HOME/.emacs") if
-it can be found.
+Given a string containing a chunk of elisp code this method runs
+it by invoking emacs in batch mode.
 
-Further, it will also load the libraries listed
-in the L</requested_libs> attribute (if they can be found
-in the emacs load-path), and it will load the files of elisp
-code listed in the L</requested_elisp_files> attribute
-(if they exist, whether or not they're present in the load-path).
+(TODO this discussion should be moved to a place that describes
+the entire group of methods that work similarly.)
 
-If the L</load_emacs_init> attribute has been turned off, it
-will not try to load the .emacs file, and similarly if the
-L</load_site_init> has been turned off, it will avoid loading
-the site-start.el file.
+By default, this method first loads the user's initialization
+file ("$HOME/.emacs") if it can be found.  It will also try to
+load the libraries listed in the L</emacs_libs> and/or
+L</lib_data> attributes.
+
+There are object attribute settings that can be used to suppress
+loading any of the various init files.  See L</new> for the full
+list.  In particular, if the L</load_emacs_init> attribute has
+been turned off, it will not try to load the .emacs file.
 
 This method returns the output from the elisp code with
-STDOUT and STDERR mixed together.  (Note: the emacs functions
-'message' and 'print' both work to generate output.)
+STDOUT and STDERR mixed together (but this behavior
+is under revision, and may change shortly TODO).
+
+(The advanatage of intermixing STDOUT and STDERR is that the
+emacs functions 'message' and 'print' both work to generate
+output.)
 
 Example:
 
@@ -574,6 +560,12 @@ sub quote_elisp {
   my $self = shift;
   my $elisp = shift;
 
+# TODO consider this hack:
+#   if ($elisp =~ m{\\\\"}xms) {
+#     warn "quote_elisp refusing to quote because it looks like it was done already: $elisp";
+#     return $elisp;
+#   };
+
   $elisp =~ s{"}{\\"}xmsg; # add one backwhack to the double-quotes
 
   return $elisp;
@@ -620,15 +612,18 @@ sub clean_return_value {
 
 =head1 internal methods
 
-The following routines are largely just used in the object
-initialization phase.
+The following routines are largely used internally in the
+object initialization phase.
 
 =over
 
-=item process_emacs_libs
+=item process_emacs_libs_addition
 
 Goes through the given list of emacs_libs, and converts the names into
 the lib_data style of data structure, appending it to lib_data.
+
+Note that this method works on the given argument, without
+reference to the object's "emacs_libs" field.
 
 Returns a reference to a structure containing the new additions to lib_data.
 
@@ -636,7 +631,7 @@ Returns a reference to a structure containing the new additions to lib_data.
 
 # Note: since set_up_ec_lib_loader qualifies the data and fills in
 # likely values for type and priority, it need not be done here.
-sub process_emacs_libs {
+sub process_emacs_libs_addition {
   my $self = shift;
   my $libs = shift;
 
@@ -648,12 +643,41 @@ sub process_emacs_libs {
 
   my $lib_data = $self->lib_data;
   push @{ $lib_data }, @new_lib_data;
-  $self->set_lib_data( $lib_data );
-
+  $self->set_lib_data( $lib_data );  # called for side-effects: set_up_ec_lib_loader
   return \@new_lib_data;
 }
 
+=item process_emacs_libs_reset
 
+This converts the list of emacs_libs into the lib_data style of
+structure much like L</process_emacs_libs_addition>, but this
+method resets the lib_data field to the given value at
+init time (if any) before appending the new data.
+
+Defaults to using the object's "emacs_libs" setting.
+
+Returns a reference to a structure containing the additions to lib_data
+from emacs_libs.
+
+=cut
+
+sub process_emacs_libs_reset {
+  my $self = shift;
+  my $libs = shift || $self->emacs_libs;
+
+  $self->reset_lib_data;
+
+  my @new_lib_data;
+  foreach my $name ( @{ $libs } ) {
+    my $rec = [ $name,  { type=>undef, priority=>undef } ];
+    push @new_lib_data, $rec;
+  }
+
+  my $lib_data = $self->lib_data;
+  push @{ $lib_data }, @new_lib_data;
+  $self->set_lib_data( $lib_data );  # called for side-effects: set_up_ec_lib_loader
+  return \@new_lib_data;
+}
 
 =item set_up_ec_lib_loader
 
@@ -670,7 +694,7 @@ This routine is called by L</init> during object initialization.
 sub set_up_ec_lib_loader {
   my $self = shift;
 
-  $self->genec_load_emacs_init;
+  $self->genec_load_emacs_init;  # zeroes out the ec_lib_loader string first
 
   my $lib_data = $self->lib_data;
 
@@ -699,10 +723,52 @@ sub set_up_ec_lib_loader {
   return $ec_lib_loader;
 }
 
+=item guess_type_from_name
+
+Given the name of an emacs library, examine it to see
+if it looks like a file system path, or an emacs
+feature name (sans path or extension)
+
+=cut
+
+sub guess_type_from_name {
+  my $self = shift;
+  my $name = shift;
+
+  my $path_found = ( $name =~ m{/}xms );
+  my $ext_found =  ( $name =~ m{\.el[c]?$}xms );
+
+  my $type;
+  if (($path_found) && ($ext_found)) {
+    $type = 'file';
+  } elsif ($path_found) {
+    $type = 'file';
+  } elsif ($ext_found) {
+    $type = 'file';
+  } else {
+    $type = 'lib';
+  }
+  return $type;
+}
+
+=back
+
+=head2 generation of emacs command strings to load libraries
+
+These are routines that generate a string that can be
+included in an emacs command line invocation to load
+certain libraries.
+
+Note the naming convention: "generate emacs command-line" => "genec_".
+
+=over
+
 =item genec_load_emacs_init
 
-Generates a fragment of emacs command line to load the
+Generates an emacs command line fragment to load the
 emacs_init file(s) as appropriate.
+
+Side effect: zeroes out the ec_lib_loader before rebuilding with inits only.
 
 =cut
 
@@ -743,41 +809,12 @@ sub genec_load_emacs_init {
   return $ec_lib_loader;
 }
 
-=item guess_type_from_name
-
-Given the name of an emacs library, examine it to see
-if it looks like a file system path, or an emacs
-feature name (sans path or extension)
-
-=cut
-
-sub guess_type_from_name {
-  my $self = shift;
-  my $name = shift;
-
-  my $path_found = ( $name =~ m{/}xms );
-  my $ext_found =  ( $name =~ m{\.el[c]?$}xms );
-
-  my $type;
-  if (($path_found) && ($ext_found)) {
-    $type = 'file';
-  } elsif ($path_found) {
-    $type = 'file';
-  } elsif ($ext_found) {
-    $type = 'file';
-  } else {
-    $type = 'lib';
-  }
-  return $type;
-}
-
 =back
 
-=head2 generation of emacs command strings to load libraries
-
-A set of four routines to generate a string that can be included in
-an emacs command line invocation to load the given library.  The
-methods here are named according to the pattern:
+The following is a set of four routines to generate a
+string that can be included in an emacs command line
+invocation to load the given library.  The methods here
+are named according to the pattern:
 
   "genec_loader_$type_$priority"
 
@@ -1233,7 +1270,7 @@ sub append_to_before_hook {
 
 =head2 accessors that effect the L</ec_lib_loader> attribute
 
-If either lib_data or emacs_libs is re-set, this must
+If either lib_data or emacs_libs is modified, this must
 trigger another run of L</set_up_ec_lib_loader> to keep
 the L</ec_lib_loader> string up-to-date.
 
@@ -1253,19 +1290,71 @@ sub set_lib_data {
   return $lib_data;
 }
 
+
+=item reset_lib_data
+
+Reverts lib_data to the value supplied during
+initization (it empties it entirely, if none was supplied).
+
+Note: this does not (at present) trigger a re-build of L</ec_lib_loader>,
+because it's presumed that this will be triggered by some step
+following this one.
+
+=cut
+
+sub reset_lib_data {
+  my $self = shift;
+  @{ $self->{ lib_data } } = @{ $self->{ lib_data_given } };
+  return $self->{ lib_data };
+}
+
+
+
 =item set_emacs_libs
 
 Setter for emacs_libs.
 
+Side effect: runs process_emacs_libs_rest on the given emacs_libs
+list.
+
+process_emacs_libs_reset indirectly calls set_up_ec_lib_loader
+so we don't need to do so explicitly here.
+
 =cut
 
 sub set_emacs_libs {
-  my $self = shift;
-  my $emacs_libs = shift;
+  my $self        = shift;
+  my $emacs_libs  = shift;
   $self->{ emacs_libs } = $emacs_libs;
-  $self->set_up_ec_lib_loader;
+  $self->process_emacs_libs_reset( $emacs_libs );
   return $emacs_libs;
 }
+
+=item push_emacs_libs
+
+Pushes a new lib to the emacs_libs array.
+
+Takes a string, returns aref of the full list of emacs_libs.
+
+Side-effect: runs process_emacs_libs_addition on the new lib,
+(appending the new info to lib_data).
+
+process_emacs_libs_addition indirectly calls set_up_ec_lib_loader
+so we don't need to do so explicitly here.
+
+=cut
+
+sub push_emacs_libs {
+  my $self = shift;
+  my $newlib = shift;
+
+  my $emacs_libs = $self->emacs_libs;
+  push @{ $emacs_libs }, $newlib;
+  $self->process_emacs_libs_addition( [ $newlib ] );
+  return $emacs_libs;
+}
+
+
 
 =back
 
@@ -1510,6 +1599,6 @@ at your option, any later version of Perl 5 you may have available.
 When the client coder specifies that a library is "needed", failure
 occurs relatively late if it's not available: it does not happen
 during object instantiation, but waits until an attempted run with
-the object (e.g. "$er->eval_elisp".
+the object (e.g. "$er->eval_elisp").
 
 =cut
