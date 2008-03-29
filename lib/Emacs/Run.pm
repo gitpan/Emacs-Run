@@ -49,8 +49,8 @@ Emacs::Run is a module that provides utilities to work with
 emacs when run from perl as an external process.
 
 The emacs "editor" has some command-line options ("--batch" and so
-on) that allow you to use it as a lisp interpreter and run elisp
-code non-interactively.
+on) that allow you to run elisp code non-interactively: essentially
+it turns emacs into a lisp interpreter.
 
 This module provides methods that use these features of emacs for
 two types of tasks:
@@ -86,7 +86,7 @@ use List::Util      qw( first );
 use Env             qw( $HOME );
 use List::MoreUtils qw( any );
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 my $DEBUG = 0;
 
 # needed for accessor generation
@@ -327,6 +327,7 @@ sub init {
   $self->set_emacs_path('emacs') unless $self->{ emacs_path };
 
   # Determine the emacs version if we haven't been told already
+  ### TODO trap error and if so, return undef?
   my $emacs_version =
     $self->emacs_version || $self->probe_emacs_version;
   $self->set_emacs_version( $emacs_version );
@@ -336,7 +337,7 @@ sub init {
   $self->{load_site_init}    = 1 unless defined( $self->{load_site_init}    );
   $self->{load_default_init} = 1 unless defined( $self->{load_default_init} );
 
-  if( $self->{load_no_inits} ) {
+  if( $self->{load_no_inits} ) { #... but we make it easy to suppress all of them, too.
     $self->{load_emacs_init}   = 0;
     $self->{load_site_init}    = 0;
     $self->{load_default_init} = 0;
@@ -446,19 +447,30 @@ sub get_variable {
 Given the name of an emacs function, this runs the function
 (without arguments) and returns the value from emacs
 (when started with the the .emacs located in $HOME, if one
-is found).
-
-As with L</get_variable>, this uses the emacs 'print'
-function internally.
+is found).  After the function name, an optional array reference
+may be supplied to pass through a list of simple arguments
+to the elisp function.  And further, an optional hash reference
+may follow that to specify options to the "eval_function" method.
 
 By default the returned output includes just STDOUT and not STDERR
 (and the object attribute L</shell_output_director> is ignored),
 but this behavior can be overridden by setting a field named
 B<shell_output_director> in the options hashref.
 
-TODO at present, the given function is evaluated without
-arguments.  A future version may allow the use of an
-optional array reference of scalar arguments...
+As with L</get_variable>, this uses the emacs 'print'
+function internally.
+
+Examples:
+
+  my $name  = $er->eval_function( 'user-full-name' );
+
+
+  $er->eval_function( 'extract-doctrings-generate-html-for-elisp-file',
+                      [ "$input_elisp_file",
+                        "$output_file",
+                        "The extracted docstrings" ] );
+
+  my $four = $er->( '+', [ 2, 2 ] ); # same as: $er->eval_elisp( '(print (+ 2 2))' );
 
 =cut
 
@@ -1620,14 +1632,14 @@ Perl has a good feature for running a shell command and capturing the
 output: qx{} (aka back-quotes), and it's easy enough to append "2>&1"
 to a shell command when you'd like to see the STDERR messages
 intermixed with the STDOUT.  This module's methods typically default
-to capturing all output like this and returning STDOUT and STDERR
-intermixed like this (though it's perhaps unfortunate that there is no
-good way to distinguishing between the messages from STDERR and STDOUT
-later)
+to capturing all output and returning STDOUT and STDERR intermixed;
+though unfortunately there is no good way to distinguishing between
+the messages from STDERR and STDOUT later, and your desired output
+may be lost in a forest of uninteresting notices sent to STDERR.
 
 From the elisp side, it's important to know that in "--batch" mode,
-the elisp function message sends output to STDERR, and you need to use
-the elisp function print if you'd like to send output to STDOUT.
+the elisp function "message" sends output to STDERR, and you need to use
+the elisp function "print" if you'd like to send output to STDOUT.
 Perhaps unfortunately, the print function also brackets all output
 with double-quotes and newlines -- the Emacs::Run module compensates by
 unceremoniously stripping these things using the L/<clean_return_value> routine.
@@ -1648,14 +1660,14 @@ The emacs variable "load-path" behaves much like the shell's $PATH
 (or perl's @INC): if you try to load a library called "dired", emacs
 searches through the load-path in sequence, looking for an appropriately
 named file (e.g. "dired.el"), it then evaluates it's contents, and
-the objects defined in the file become available for use.  It is also possible
+the features defined in the file become available for use.  It is also possible
 to load a file by telling emacs the path and filename, and that works
 whether or not it is located in the load-path.
 
 There I<is> at least a slight difference between the two, however.
 For example, the present version of the "extract-docstrings.el"
 library (see L<Emacs::Run::ExtractDocs>) contains code like this, that
-will break if it is not in the load-path:
+will break if the library you're looking for is not in the load-path:
 
   (setq codefile (locate-library library))
 
@@ -1682,18 +1694,14 @@ sets X fonts for me:
 
 =item *
 
-The method L</eval_function> should really pass through any arguments
-to the function.
+Have "new" fail (return undef) if emacs can not be
+found on the system.  This way you can use the result
+of "new" to determine if you should skip tests, etc.
 
 =item *
 
 Eliminate unixisms, if possible.  A known one: there's a heuristic
 that spots file paths by looking for "/".  Use File::Spec.
-
-=item *
-
-Modify the eval_function method to allow for arguments to be
-passed through to the function.
 
 =item *
 

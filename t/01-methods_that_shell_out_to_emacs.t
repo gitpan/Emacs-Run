@@ -337,7 +337,8 @@ my $USR     = "$Bin/dat/usr";
     my ($result, $expected) = slurp_files( $result_file, $expected_file );
 
     eq_or_diff( $result, $expected,
-                "$test_name: upcase/forward-word on ghostcowboy/chesterson.txt");
+                "$test_name: upcase/forward-word on ghostcowboy/chesterson.txt") or
+                  print STDERR "using emacs version: $emacs_found";
   }
 }
 
@@ -378,7 +379,8 @@ my $USR     = "$Bin/dat/usr";
   my ($result, $expected) = slurp_files( $result_file, $expected_file );
 
   eq_or_diff( $result, $expected,
-              "$test_name: upcase-region on penguindust/chesterson-us.txt");
+              "$test_name: upcase-region on penguindust/chesterson-us.txt") or
+                  print STDERR "using emacs version: $emacs_found";
 }
 
 # a few tests for old routines which may still be in use by Emacs::Run::ExtractDocs

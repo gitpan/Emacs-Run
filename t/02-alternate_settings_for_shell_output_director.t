@@ -185,7 +185,8 @@ my $USR     = "$Bin/dat/usr";
   my ($result, $expected) = slurp_files( $result_file, $expected_file );
 
   eq_or_diff( $result, $expected,
-              "$test_name: upcase-region on penguindust/chesterson.txt");
+              "$test_name: upcase-region on penguindust/chesterson.txt") or
+                print STDERR "using emacs version: $emacs_found";
 
   # But that's not what we really care about just now... the return value is the thing:
   print STDERR "ret: $ret\n" if $DEBUG;

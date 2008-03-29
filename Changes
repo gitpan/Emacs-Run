@@ -12,7 +12,12 @@ Revision history for Perl extension Emacs::Run.
 
 
 0.03  Monday March 24, 2008   5:52 PM
-       - added finer-grained control over manipulation of STDERR and STDOUT;
-         fixed a problem with portability of a test (definition of
-         "word" characters include spaces for some emacsen?)
+       - added finer-grained control over manipulation of STDERR
+       and STDOUT (the "shell_output_director" object attribute
+       and method option);
+
+0.04  Saturday March 29, 2008  12:55 AM
+       - improved documentation for the method "eval_function";
+       added emacs version dump to tests that have been failing
+       on some platforms.
 
