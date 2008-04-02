@@ -21,3 +21,9 @@ Revision history for Perl extension Emacs::Run.
        added emacs version dump to tests that have been failing
        on some platforms.
 
+
+0.05  Wednesday April  2, 2008  12:21 AM
+      - added method no_splash_p to probe for emacs '--no-splash'
+      option, modified "run_elisp_on_file" to avoid using that
+      option when it's not there (I'm swatting some pesky
+      cross-platform bugs with a sledge-hammer)

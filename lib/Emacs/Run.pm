@@ -86,7 +86,7 @@ use List::Util      qw( first );
 use Env             qw( $HOME );
 use List::MoreUtils qw( any );
 
-our $VERSION = '0.04';
+our $VERSION = '0.05';
 my $DEBUG = 0;
 
 # needed for accessor generation
@@ -199,16 +199,16 @@ L</eval_elisp>, L</run_elisp_on_file>, etc).
 
 =item lib_data
 
-This is a more complicated data structure than L</emacs_libs> which is
-the preferred interface to use for most uses.  Essentially, B<lib_data>
-is the internal representation that </emacs_libs> is converted into,
-but the client programmer is provided access to it to cover any
-unusual needs.
+Note: using L</emacs_libs> is usually preferrable to L</lib_data>.
+
+B<lib_data> is the internal representation that </emacs_libs> is
+converted into, but the client programmer is provided access to it to
+cover any unusual needs.
 
 The structure of B<lib_data> is an array of arrays of two elements each,
 the first element is the library name (a string, with or without path),
-the second element is a hash of library attributes: 'priority' which can
-be 'requested' or 'needed' and 'type' which can be 'file' or 'lib'.
+the second element is a hash of library attributes: 'priority' (which can
+be 'requested' or 'needed') and 'type' (which can be 'file' or 'lib').
 
 Example:
 
@@ -225,7 +225,7 @@ emacs library attributes:
 =item priority
 
 A 'requested' library will be silently skipped if it is not available,
-but a 'needed' file will cause an error to occur if it is not available.
+but if a 'needed' file is not available it's regarded as an error condition.
 The default priority is 'requested', but that can be changed via the
 L</default_priority> attribute.  See L</default_priority> for more
 details.
@@ -248,8 +248,8 @@ are loaded first, followed by the B<emacs_libs> libraries.
 
 =back
 
-These attributes are used to supply data to the client programmer
-(i.e. they're intended to be regarded as read-only):
+These attributes are used to pass information to the client programmer,
+they should be regarded as read-only:
 
 =over
 
@@ -444,13 +444,13 @@ sub get_variable {
 
 =item eval_function
 
-Given the name of an emacs function, this runs the function
-(without arguments) and returns the value from emacs
-(when started with the the .emacs located in $HOME, if one
-is found).  After the function name, an optional array reference
-may be supplied to pass through a list of simple arguments
-to the elisp function.  And further, an optional hash reference
-may follow that to specify options to the "eval_function" method.
+Given the name of an emacs function, this runs the function (without
+arguments) and returns the value from emacs (when started with the
+the .emacs located in $HOME, if one is found).  After the function
+name, an optional array reference may be supplied to pass through a
+list of simple arguments (limited to strings) to the elisp function.
+And further, an optional hash reference may follow that to specify
+options to the "eval_function" method.
 
 By default the returned output includes just STDOUT and not STDERR
 (and the object attribute L</shell_output_director> is ignored),
@@ -464,13 +464,11 @@ Examples:
 
   my $name  = $er->eval_function( 'user-full-name' );
 
-
   $er->eval_function( 'extract-doctrings-generate-html-for-elisp-file',
                       [ "$input_elisp_file",
                         "$output_file",
                         "The extracted docstrings" ] );
 
-  my $four = $er->( '+', [ 2, 2 ] ); # same as: $er->eval_elisp( '(print (+ 2 2))' );
 
 =cut
 
@@ -509,6 +507,41 @@ sub eval_function {
 
   return $return;
 }
+
+
+
+=item no_splash_p
+
+Looks for the emacs command line option "--no-splash", returning true (1)
+if it exists, and false (0) otherwise.
+
+=cut
+
+sub no_splash_p {
+  my $self = shift;
+  my $subname = ( caller(0) )[3];
+
+  my $emacs       = $self->emacs_path;
+  my $before_hook = $self->before_hook;
+  $before_hook .= ' --no-splash ';
+
+  my $emacs_cmd = qq{ $emacs --batch $before_hook 2>1 };
+
+  $self->debug("$subname: emacs_cmd: $emacs_cmd");
+
+  my $retval = qx{ $emacs_cmd };
+  $retval = $self->clean_return_value( $retval );
+
+  $self->debug( "$subname retval:\n===\n$retval\n===\n" );
+
+  if( $retval =~ m{ Unknown \s+ option \s+ .*? --no-splash }xms ) {
+    return 0;
+  } else {
+    return 1;
+  }
+}
+
+
 
 =back
 
@@ -646,8 +679,10 @@ sub run_elisp_on_file {
   my $before_hook = $self->before_hook;
 
   # Covering a gnu emacs 21 stupidity: need "--no-splash"
+  # (but careful not to use no-splash if it doesn't exist).
   if ( $self->emacs_major_version eq '21' &&
-       $self->emacs_type eq 'GNU Emacs' ) {
+       $self->emacs_type eq 'GNU Emacs' &&
+       $self->no_splash_p ) {
     $before_hook .= ' --no-splash ';
   }
 
@@ -1355,8 +1390,10 @@ The naming convention in use here is that setters begin with
 "set_", but getters have *no* prefix: the most commonly used case
 deserves the simplest syntax (and mutators are deprecated).
 
-These accessors exist for all of the object attributes (documented
-above) irrespective of whether they're expected to be externally useful.
+Setters and getters exist for all of the object attributes which are
+documented with the L</new> method (but note that these exist even for
+"internal" attributes that are not expected to be useful to the client
+coder).
 
 =head2 special accessors
 
@@ -1387,9 +1424,11 @@ sub append_to_ec_lib_loader {
 Non-standard setter that appends the given string to the
 the L</before_hook> attribute.
 
-Under some circumstances, the code here uses the L</before_hook>
-(for -Q and --no-splash), so using a setter is mildly dangerous.
-Typically it's better to just append to the L</before_hook>.
+Under some circumstances, this module uses the L</before_hook>
+for internal purposes (for -Q and --no-splash), so using an
+ordinary setter could be mildly dangerous (you might erase
+something you didn't realize was there).  Typically it's better
+to just append to the L</before_hook> by using this method.
 
 =cut
 
