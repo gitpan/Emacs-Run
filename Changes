@@ -24,6 +24,11 @@ Revision history for Perl extension Emacs::Run.
 
 0.05  Wednesday April  2, 2008  12:21 AM
       - added method no_splash_p to probe for emacs '--no-splash'
-      option, modified "run_elisp_on_file" to avoid using that
+      option, and modified "run_elisp_on_file" to avoid using that
       option when it's not there (I'm swatting some pesky
       cross-platform bugs with a sledge-hammer)
+
+
+0.06  Wednesday April  2, 2008   1:25 AM
+      - changing default shell_output_director for the get_load_path method
+      to discard messages sent to stderr

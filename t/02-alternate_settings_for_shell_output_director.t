@@ -61,7 +61,8 @@ my $USR     = "$Bin/dat/usr";
      "$code_lib",
      "$code_lib_alt",
      ];
-  is_deeply( $load_path_aref, $expected_load_path_aref, "$test_name unset" );
+  is_deeply( $load_path_aref, $expected_load_path_aref,
+             "$test_name unset" );
 
   #4
   $set = '1>/dev/null 2>&1'; # toss all output
@@ -71,7 +72,8 @@ my $USR     = "$Bin/dat/usr";
                                     });
   print STDERR "\nload_path_aref:\n", Dumper($load_path_aref), "\n" if $DEBUG;
   $expected_load_path_aref = [ ];
-  is_deeply( $load_path_aref, $expected_load_path_aref, "$test_name set to $set on method" );
+  is_deeply( $load_path_aref, $expected_load_path_aref,
+             "$test_name set to $set on method" );
 
   #5
   $set = '1>/dev/null 2>&1'; # toss all output
@@ -80,8 +82,13 @@ my $USR     = "$Bin/dat/usr";
                         });
   $load_path_aref = $er->$method();
   print STDERR "\nload_path_aref:\n", Dumper($load_path_aref), "\n" if $DEBUG;
-  $expected_load_path_aref = [ ];
-  is_deeply( $load_path_aref, $expected_load_path_aref, "$test_name set to $set in new" );
+  $expected_load_path_aref =    [
+                                 '/tmp',
+                                 "$USR/lib",
+                                 "$USR/lib-alt",
+                                ];
+  is_deeply( $load_path_aref, $expected_load_path_aref,
+             "$test_name set in new, and hence ignored" );
 }
 
 {#6, #7, #8

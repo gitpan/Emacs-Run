@@ -86,7 +86,7 @@ use List::Util      qw( first );
 use Env             qw( $HOME );
 use List::MoreUtils qw( any );
 
-our $VERSION = '0.05';
+our $VERSION = '0.06';
 my $DEBUG = 0;
 
 # needed for accessor generation
@@ -373,18 +373,27 @@ user's .emacs, if it can be found) as a reference to a perl array.
 Changing the $HOME environment variable before running this method
 results in loading the .emacs file located in the new $HOME.
 
-Uses the object's L</shell_output_director> by default, but an
-overide value can be specified in an options hash reference.
+By default the returned output includes just STDOUT and not STDERR
+(and the object attribute L</shell_output_director> is ignored),
+but this behavior can be overridden by setting a field named
+B<shell_output_director> in the options hashref.
+
+An example of that usage:
+
+  my $returned_string =
+    $er->get_load_path(  { shell_output_director => '2>&1',
+                         } );
 
 =cut
 
 sub get_load_path {
   my $self = shift;
   my $opts = shift;
-  my $sod =
-    $opts->{ shell_output_director } || $self->shell_output_director;
+  my $sod = $opts->{ shell_output_director } || '2>/dev/null';
+#  my $sod =
+#    $opts->{ shell_output_director } || $self->shell_output_director;
 
-  my $elisp = q{ (message (mapconcat 'identity load-path "\n")) };
+  my $elisp = q{ (print (mapconcat 'identity load-path "\n")) };
   my $return = $self->eval_elisp( $elisp, {
                                            shell_output_director => $sod,
                                           } );
