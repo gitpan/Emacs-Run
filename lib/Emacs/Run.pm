@@ -86,7 +86,7 @@ use List::Util      qw( first );
 use Env             qw( $HOME );
 use List::MoreUtils qw( any );
 
-our $VERSION = '0.06';
+our $VERSION = '0.07';
 my $DEBUG = 0;
 
 # needed for accessor generation
@@ -519,14 +519,14 @@ sub eval_function {
 
 
 
-=item no_splash_p
+=item probe_for_option_no_splash
 
 Looks for the emacs command line option "--no-splash", returning true (1)
 if it exists, and false (0) otherwise.
 
 =cut
 
-sub no_splash_p {
+sub probe_for_option_no_splash {
   my $self = shift;
   my $subname = ( caller(0) )[3];
 
@@ -534,12 +534,18 @@ sub no_splash_p {
   my $before_hook = $self->before_hook;
   $before_hook .= ' --no-splash ';
 
-  my $emacs_cmd = qq{ $emacs --batch $before_hook 2>1 };
+  if ( $self->emacs_type eq 'XEmacs' ) {
+    return 0; # xemacs has no --no-splash
+  }
 
-  $self->debug("$subname: emacs_cmd: $emacs_cmd");
+  my $emacs_cmd = qq{ $emacs --batch $before_hook 2>&1 };
+
+  $self->debug("$subname: emacs_cmd: $emacs_cmd\n");
 
   my $retval = qx{ $emacs_cmd };
   $retval = $self->clean_return_value( $retval );
+
+  my $last_line = ( split /\n/, $retval )[-1] || '';
 
   $self->debug( "$subname retval:\n===\n$retval\n===\n" );
 
@@ -687,11 +693,11 @@ sub run_elisp_on_file {
   my $emacs       = $self->emacs_path;
   my $before_hook = $self->before_hook;
 
-  # Covering a gnu emacs 21 stupidity: need "--no-splash"
-  # (but careful not to use no-splash if it doesn't exist).
+  # Covering a stupidity with some versions of gnu emacs 21: "--no-splash"
+  # to suppress an inane splash screen.
   if ( $self->emacs_major_version eq '21' &&
        $self->emacs_type eq 'GNU Emacs' &&
-       $self->no_splash_p ) {
+       $self->probe_for_option_no_splash ) {
     $before_hook .= ' --no-splash ';
   }
 
@@ -700,7 +706,7 @@ sub run_elisp_on_file {
   my $ec_lib_loader = $self->ec_lib_loader;
   my $emacs_cmd = "$ec_head $ec_lib_loader $ec_tail $sod";
 
-  $self->debug("$subname: emacs_cmd: $emacs_cmd");
+  $self->debug("$subname: emacs_cmd: $emacs_cmd\n");
 
   my $return = qx{ $emacs_cmd };
   $return = $self->clean_return_value( $return );
@@ -1262,9 +1268,11 @@ sub detect_site_init {
 
   $self->debug("$subname return:\n $return\n");
 
-  my $last_line = ( split /\n/, $return )[-1] || '';
+#  my $last_line = ( split /\n/, $return )[-1] || '';
+#  if ( $last_line =~ m{^\s*Cannot open load file:} ) {
 
-  if ( $last_line =~ m{^\s*Cannot open load file:} ) {
+  if ( defined( $return ) &&
+       $return =~ m{\bCannot \s+ open \s+ load \s+ file: \s+ $lib_name \b}xms ) {
     return;
   } else {
     return $lib_name;
@@ -1305,11 +1313,11 @@ sub detect_lib {
   my $ec_tail = qq{ 2>&1 };
 
   my $emacs_cmd = qq{ $ec_head $ec_lib_loader -l $lib $ec_tail};
+  $self->debug("emacs_cmd: $emacs_cmd\n");
   my $return = qx{ $emacs_cmd };
-  my $last_line = ( split /\n/, $return )[-1];
 
-  if ( defined( $last_line ) &&
-       $last_line =~ m{^\s*Cannot open load file:} ) {
+  if ( defined( $return ) &&
+       $return =~ m{\bCannot \s+ open \s+ load \s+ file: \s+ $lib \b}xms ) {
     return;
   } else {
     return $lib;
@@ -1690,12 +1698,12 @@ the elisp function "message" sends output to STDERR, and you need to use
 the elisp function "print" if you'd like to send output to STDOUT.
 Perhaps unfortunately, the print function also brackets all output
 with double-quotes and newlines -- the Emacs::Run module compensates by
-unceremoniously stripping these things using the L/<clean_return_value> routine.
+unceremoniously stripping them (via L/<clean_return_value>).
 
-Note: the reasoning behind intermixing by default is that this
-batch-mode behavior of message and print is slightly obscure, even to
-an elisp programmer: returning I<everything> by default is more likely
-to result in code that Just Works.
+Note: the reasoning behind intermixing STDOUT and STDERR by default is
+that this batch-mode behavior of message and print is slightly obscure,
+even to an elisp programmer: returning I<everything> by default is more
+likely to result in code that Just Works.
 
 A new feature with the 0.3 release is the L</shell_output_director>
 attribute (plus the addition of a method-specific options to override
@@ -1800,9 +1808,24 @@ at your option, any later version of Perl 5 you may have available.
 
 =head1 BUGS & LIMITATIONS
 
-When the client coder specifies that a library is "needed", failure
-occurs relatively late if it's not available: it does not happen
-during object instantiation, but waits until an attempted run with
-the object (e.g. "$er->eval_elisp").
+=over
+
+=item *
+
+When an elisp library is marked as "needed", and it is not available,
+failure occurs relatively late: it does not happen during object
+instantiation, but waits until an attempted run with the object
+(that is, on a call such as "$er->eval_elisp", not "$er->new").
+
+=item *
+
+This module was developed around Gnu emacs running on a Gnu/linux
+system.  No testing to speak of has been done on any other platform
+(though it would be suprising if it didn't work on any unix-like
+system, at least).  Similarly, it may work with xemacs for some
+purposes, but very little testing has been done in that direction.
+
+=back
+
 
 =cut

@@ -6,7 +6,7 @@
 use warnings;
 use strict;
 $|=1;
-my $DEBUG = 0;
+my $DEBUG = 1;
 use Data::Dumper;
 use File::Copy qw( copy );
 use File::Basename qw( fileparse basename dirname );
@@ -326,7 +326,8 @@ my $USR     = "$Bin/dat/usr";
            (print count))
     };
 
-  my $ret = $er->run_elisp_on_file( $filename, $elisp, {shell_output_director=>'2>/dev/null' } );
+  my $ret = 0;
+  $ret ||= $er->run_elisp_on_file( $filename, $elisp, {shell_output_director=>'2>/dev/null' } );
   print STDERR "ret: $ret\n" if $DEBUG;  # 49
 
  SKIP: {
