@@ -1,7 +1,7 @@
 # http://module-build.sourceforge.net/META-spec.html
 #XXXXXXX This is a prototype!!!  It will change in the future!!! XXXXX#
 name:         Emacs-Run
-version:      0.07
+version:      0.08
 version_from: lib/Emacs/Run.pm
 installdirs:  site
 requires:
@@ -10,6 +10,7 @@ requires:
     Data::Dumper:                  0
     File::Basename:                0
     File::Copy:                    0
+    File::Spec:                    0
     Hash::Util:                    0
     lib:                           0
     List::MoreUtils:               0

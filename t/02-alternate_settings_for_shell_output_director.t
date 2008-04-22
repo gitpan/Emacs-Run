@@ -18,7 +18,20 @@ use lib "$Bin/../lib";
 use lib "$Bin/lib";
 use Emacs::Run::Testorama qw( :all );
 
-my $emacs_found = `emacs --version 2>/dev/null`;
+# Globals
+my $CLASS   = 'Emacs::Run';
+my $SRC_LOC = "$Bin/dat/src";
+my $USR     = "$Bin/dat/usr";
+
+my $devnull = File::Spec->devnull;
+my $emacs_found;
+eval {
+  $emacs_found = qx{ emacs --version 2>$devnull };
+};
+if($@) {
+  $emacs_found = '';
+  print STDERR "Problem with qx of emacs: $@\n" if $DEBUG;
+}
 
 if( not( $emacs_found ) ) {
   plan skip_all => 'emacs was not found in PATH';
@@ -26,14 +39,9 @@ if( not( $emacs_found ) ) {
   plan tests => 23;
 }
 
-use_ok( 'Emacs::Run' );
+use_ok( $CLASS );
 
 ok(1, "Traditional: If we made it this far, we're ok."); #2
-
-# Globals
-my $CLASS   = 'Emacs::Run';
-my $SRC_LOC = "$Bin/dat/src";
-my $USR     = "$Bin/dat/usr";
 
 {#3, #4, #5
   my $method = "get_load_path";

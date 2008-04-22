@@ -3,7 +3,7 @@ use base qw( Class::Base );
 
 =head1 NAME
 
-Emacs::Run - utilities to assist in using emacs from perl via the shell
+Emacs::Run - use emacs from perl via the shell
 
 =head1 SYNOPSIS
 
@@ -14,23 +14,26 @@ Emacs::Run - utilities to assist in using emacs from perl via the shell
       print "You have a recent version of emacs\n";
    }
 
-   # quickly specify additional elisp libraries to use, then get information about emacs settings
+   # use extra emacs lisp libraries, then get emacs settings
    my $er = Emacs::Run->new({
-                         emacs_libs => [ '~/lib/my-elisp.el', '/usr/lib/site-emacs/stuff.el' ],
-                          });
+                 emacs_libs => [ '~/lib/my-elisp.el',
+                                 '/usr/lib/site-emacs/stuff.el' ],
+                 });
    my $emacs_load_path_aref = $er->get_load_path;
    my $email = $er->get_variable(  'user-mail-address' );
    my $name  = $er->eval_function( 'user-full-name'    );
+
 
 
    # suppress the use of the usual emacs init (e.g. ~/.emacs)
    my $er = Emacs::Run->new({
                        load_emacs_init => 0,
                     });
-   my $result = $er->eval_elisp( '(print (+ 2 2))' );  # "4", in case you were wondering
+   my $result = $er->eval_elisp( '(print (+ 2 2))' );  # that's "4"
 
 
-   # Specify in detail which emacs lisp libraries should be loaded
+
+   # Specify in detail how the emacs lisp libraries should be loaded
    $lib_data = [
        [ 'dired',                 { type=>'lib',  priority=>'needed'    } ],
        [ '/tmp/my-load-path.el',  { type=>'file', priority=>'requested' } ],
@@ -39,7 +42,13 @@ Emacs::Run - utilities to assist in using emacs from perl via the shell
    my $er = Emacs::Run->new({
                        lib_data => $lib_data,
                     });
-   my $result = $er->eval_lisp( qq{ (print (my-elisp-run-my-code "$perl_string")) } );
+   my $result = $er->eval_lisp(
+                  qq{ (print (my-elisp-run-my-code "$perl_string")) }
+                );
+
+
+   # Command line usage to view your emacs load_path
+   perl -MEmacs::Run -MData::Dumper -e'my $er=Emacs::Run->new; print Dumper( $er->get_load_path ), "\n"';
 
 
 
@@ -50,10 +59,10 @@ emacs when run from perl as an external process.
 
 The emacs "editor" has some command-line options ("--batch" and so
 on) that allow you to run elisp code non-interactively: essentially
-it turns emacs into a lisp interpreter.
+these turn emacs into a lisp interpreter.
 
-This module provides methods that use these features of emacs for
-two types of tasks:
+This module provides methods to allow perl code to easily use these
+features of emacs for two types of tasks:
 
 =over
 
@@ -82,11 +91,13 @@ use Carp;
 use Data::Dumper;
 use Hash::Util      qw( lock_keys unlock_keys );
 use File::Basename  qw( fileparse basename dirname );
+use File::Spec;
 use List::Util      qw( first );
 use Env             qw( $HOME );
 use List::MoreUtils qw( any );
+# use IPC::Cmd        qw( can_run run );
 
-our $VERSION = '0.07';
+our $VERSION = '0.08';
 my $DEBUG = 0;
 
 # needed for accessor generation
@@ -112,6 +123,10 @@ names, you can choose which one will be used by setting this attribute.
 
 =item shell_output_director
 
+Note: this is feature is most likely going to change in it's
+behavior in the next release (after switching over to using
+L<IPC::Capture>).
+
 The B<shell_output_director> (sometimes called B<sod> for short) is a
 string appended to all of the internally generated emacs invocation
 commands to control what happens to output.  This is object attribute
@@ -121,18 +136,20 @@ unless another value is specified.
 Most methods here accept a hash reference of options that can include
 their own B<shell_output_director> setting.
 
-Typical values are:
+Typical values (on a unix-like system) are:
 
 =over
 
 =item  '2>&1'
 
-Intermix STDOUT and STDERR  (in elisp: both "message" and "print" functions work).
-This is the default setting for this object attribute.
+Intermix STDOUT and STDERR (in elisp: both "message" and "print"
+functions work).  This is the default setting for this object
+attribute.
 
 =item  '2>/dev/null'
 
-return only STDOUT, throwing away STDERR  (in elisp: get output only from "print")
+return only STDOUT, throwing away STDERR (in elisp: get output
+only from "print")
 
 =item  "> $file 2>&1"
 
@@ -140,7 +157,8 @@ send all output to the file $file
 
 =item  ">> $file 2>&1"
 
-append all output to the file $file, preserving any existing content.
+append all output to the file $file, preserving any existing
+content.
 
 =item  "2 > $log_file"
 
@@ -324,20 +342,17 @@ sub init {
   $self->{ec_lib_loader} = '';
 
   # If we weren't given a path, let the $PATH sort it out
-  $self->set_emacs_path('emacs') unless $self->{ emacs_path };
+  $self->{ emacs_path } ||= 'emacs';
 
   # Determine the emacs version if we haven't been told already
-  ### TODO trap error and if so, return undef?
-  my $emacs_version =
-    $self->emacs_version || $self->probe_emacs_version;
-  $self->set_emacs_version( $emacs_version );
+  $self->{ emacs_version } ||= $self->probe_emacs_version;
 
   # By default, we like to load all init files
   $self->{load_emacs_init}   = 1 unless defined( $self->{load_emacs_init}   );
   $self->{load_site_init}    = 1 unless defined( $self->{load_site_init}    );
   $self->{load_default_init} = 1 unless defined( $self->{load_default_init} );
 
-  if( $self->{load_no_inits} ) { #... but we make it easy to suppress all of them, too.
+  if( $self->{load_no_inits} ) { # ... but we make it easy to suppress all of them, too.
     $self->{load_emacs_init}   = 0;
     $self->{load_site_init}    = 0;
     $self->{load_default_init} = 0;
@@ -389,7 +404,9 @@ An example of that usage:
 sub get_load_path {
   my $self = shift;
   my $opts = shift;
-  my $sod = $opts->{ shell_output_director } || '2>/dev/null';
+  my $devnull = File::Spec->devnull();
+  my $sod = $opts->{ shell_output_director } || "2>$devnull";
+
 #  my $sod =
 #    $opts->{ shell_output_director } || $self->shell_output_director;
 
@@ -434,7 +451,9 @@ sub get_variable {
   my $self    = shift;
   my $varname = shift;
   my $opts    = shift;
-  my $sod = $opts->{ shell_output_director } || '2>/dev/null';
+  my $devnull = File::Spec->devnull();
+  my $sod = $opts->{ shell_output_director } || "2>$devnull";
+
   my $subname = ( caller(0) )[3];
 
   my $elisp = qq{ (print $varname) };
@@ -447,7 +466,6 @@ sub get_variable {
   } else {
     $return = $self->eval_elisp_skip_err( $elisp );  # backwards compatibility.  remove? TODO
   }
-
   return $return;
 }
 
@@ -496,7 +514,8 @@ sub eval_function {
     $opts     = $arg2;
   }
 
-  my $sod = $opts->{ shell_output_director } || '2>/dev/null';
+  my $devnull = File::Spec->devnull();
+  my $sod = $opts->{ shell_output_director } || "2>$devnull";
 
   my $elisp;
   if( $passthru ) {
@@ -526,6 +545,7 @@ if it exists, and false (0) otherwise.
 
 =cut
 
+# earlier versions called this "no_splash_p"
 sub probe_for_option_no_splash {
   my $self = shift;
   my $subname = ( caller(0) )[3];
@@ -749,35 +769,15 @@ sub quote_elisp {
   my $self = shift;
   my $elisp = shift;
 
-# TODO consider this hack:
+# TODO consider adding this hack:
 #   if ($elisp =~ m{\\\\"}xms) {
 #     warn "quote_elisp refusing to quote because it looks like it was done already: $elisp";
 #     return $elisp;
 #   };
 
   $elisp =~ s{"}{\\"}xmsg; # add one backwhack to the double-quotes
-
   return $elisp;
 }
-
-=item qx_clean
-
-Executes the given emacs shell invocation string, and returns
-a cleaned up version of it's returned value.  This is intended
-to be used with elisp that uses the 'print' function, which
-has spurious leading and trailing newlines and double-quotes.
-
-=cut
-
-sub qx_clean {
-  my $self       = shift;
-  my $emacs_cmd  = shift;
-  my $return = qx{ $emacs_cmd };
-  $return = $self->clean_return_value( $return );
-  return $return;
-}
-
-
 
 =item clean_return_value
 
@@ -895,7 +895,7 @@ sub set_up_ec_lib_loader {
 
     # qualify the lib_data
     unless ( $type ) {
-      $type = $self->guess_type_from_name( $name );
+      $type = $self->lib_or_file( $name );
       $rec->[1]->{type} = $type;
     }
     unless ( $priority ) {
@@ -912,25 +912,37 @@ sub set_up_ec_lib_loader {
   return $ec_lib_loader;
 }
 
-=item guess_type_from_name
+=item lib_or_file
 
-Given the name of an emacs library, examine it to see
-if it looks like a file system path, or an emacs
-feature name (sans path or extension)
+Given the name of an emacs library, examine it to see if it
+looks like a file system path, or an emacs library (technically
+a "feature name", i.e. sans path or extension).
+
+Returns a string, either "file" or "lib".
 
 =cut
 
-sub guess_type_from_name {
+sub lib_or_file {
   my $self = shift;
   my $name = shift;
 
-  my $path_found = ( $name =~ m{/}xms );
+  ### TODO portability.  Abuse File::Spec->splitpath?
+  # my $path_found = ( $name =~ m{/}xms );
+
+  my $path_found;
+  my ($volume,$directories,$file) = File::Spec->splitpath( $name );
+  if( $directories || $volume ) {
+    $path_found = 1;
+  }
+
   my $ext_found =  ( $name =~ m{\.el[c]?$}xms );
 
   my $type;
-  if (($path_found) && ($ext_found)) {
-    $type = 'file';
-  } elsif ($path_found) {
+#   if (($path_found) && ($ext_found)) {
+#     $type = 'file';
+#   } els
+
+  if ($path_found) {
     $type = 'file';
   } elsif ($ext_found) {
     $type = 'file';
@@ -1113,20 +1125,45 @@ details about the emacs version:
   emacs_major_version
   emacs_type
 
+By default the returned output includes just STDOUT and not STDERR
+(and the object attribute L</shell_output_director> is ignored),
+but this behavior can be overridden by setting a field named
+B<shell_output_director> in the options hashref.
+
+An example of that usage:
+
+  my $version_text =
+    $er->probe_emacs_version(  { shell_output_director => '2>&1',
+                                } );
+
 =cut
 
 sub probe_emacs_version {
   my $self = shift;
+  my $opts = shift;
+  my $subname = ( caller(0) )[3];
+
+  my $devnull = File::Spec->devnull();
+  my $sod = $opts->{ shell_output_director } || "2>$devnull";
 
   my $emacs = $self->emacs_path;
 
-  my $cmd = "$emacs --version";
+  my $cmd = "$emacs --version $sod";
   my $text = qx{ $cmd };
 
-  # $self->debug( $text, "\n" );
+  # not using sod (but why not?)  TODO
+  # my $cmd = "$emacs --version";
+  # my $text = qx{ $cmd };
+  #
+
+  # IPC::Cmd experiment
+  # my( $success, $error_code, $full_buf, $stdout_buf, $stderr_buf ) =
+  #   run( command => $cmd, verbose => 0 );
+  # my $text = $stdout_buf->[0];
+
+  $self->debug( "$subname:\n $text\n" );
 
   my $version = $self->parse_emacs_version_string( $text );
-
   return $version;
 }
 
@@ -1756,8 +1793,14 @@ of "new" to determine if you should skip tests, etc.
 
 =item *
 
-Eliminate unixisms, if possible.  A known one: there's a heuristic
-that spots file paths by looking for "/".  Use File::Spec.
+Eliminate unixisms, if possible:
+
+  o  A known one: there's a heuristic that spots file paths by looking for "/".
+     (FIXED)
+
+  o  Use File::Spec more, specfically to generate $devnull
+
+  o  Re-write around IPC::Capture.
 
 =item *
 
@@ -1815,15 +1858,14 @@ at your option, any later version of Perl 5 you may have available.
 When an elisp library is marked as "needed", and it is not available,
 failure occurs relatively late: it does not happen during object
 instantiation, but waits until an attempted run with the object
-(that is, on a call such as "$er->eval_elisp", not "$er->new").
+(that is, on a call such as "$er->eval_elisp", not "Emacs::Run->new").
 
 =item *
 
-This module was developed around Gnu emacs running on a Gnu/linux
-system.  No testing to speak of has been done on any other platform
-(though it would be suprising if it didn't work on any unix-like
-system, at least).  Similarly, it may work with xemacs for some
-purposes, but very little testing has been done in that direction.
+This module was developed around Gnu emacs running on a
+Gnu/linux platform.  Some attempts have been made to make it's
+use portable to other platforms.  At present, using it with a
+non-gnu emacs such as xemacs is not likely to work.
 
 =back
 

@@ -4,28 +4,27 @@ Revision history for Perl extension Emacs::Run.
 	- original version; created by h2xs 1.23 with options
 		-AX -nEmacs::Run -b5.8.0
 
-
 0.02  Monday March 24, 2008   5:48 PM
        - some bugfixes (corrected initialization involving emacs
-       libraries to load, etc.);
-       tests will now skip if no 'emacs' is present.
+         libraries to load, etc.);
+       - tests will now skip if no 'emacs' is present.
 
 
 0.03  Monday March 24, 2008   5:52 PM
        - added finer-grained control over manipulation of STDERR
-       and STDOUT (the "shell_output_director" object attribute
-       and method option);
+         and STDOUT (the "shell_output_director" object attribute
+         and method option);
 
 0.04  Saturday March 29, 2008  12:55 AM
-       - improved documentation for the method "eval_function";
-       added emacs version dump to tests that have been failing
-       on some platforms.
+       - improved documentation for the method "eval_function"
+       - added emacs version dump to tests that have been failing
+         on some platforms.
 
 0.05  Wednesday April  2, 2008  12:21 AM
       - added method no_splash_p to probe for emacs '--no-splash'
-      option, and modified "run_elisp_on_file" to avoid using that
-      option when it's not there (I'm trying to swat some pesky
-      cross-platform bugs with a sledge-hammer)
+        option, and modified "run_elisp_on_file" to avoid using that
+        option when it's not there (I'm trying to swat some pesky
+        cross-platform bugs with a sledge-hammer)
 
 0.06  Wednesday April  2, 2008   1:25 AM
       - changing default shell_output_director for the get_load_path method
@@ -37,3 +36,11 @@ Revision history for Perl extension Emacs::Run.
       - in "detect_lib" and friends made similar improvements
         to detect the "Cannot open load file" error under wider
         circumstances (including under xemacs).
+
+0.08  Monday April 21, 2008   5:21 PM
+      - added "shell_output_director" option to "probe_emacs_version".
+      - made the test code more robust with error trapping on the
+        initial probe for the presence of emacs
+      - Using File::Spec in lib_or_file rather than matching for '/'
+      - Using File::Spec->devnull now in tests.
+

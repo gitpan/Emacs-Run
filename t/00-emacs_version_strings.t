@@ -15,7 +15,18 @@ use Test::Differences;
 use FindBin qw( $Bin ); #
 use lib "$Bin/../lib";
 
-my $emacs_found = `emacs --version 2>/dev/null`;
+# Globals
+my $CLASS   = 'Emacs::Run';
+
+my $devnull = File::Spec->devnull;
+my $emacs_found;
+eval {
+  $emacs_found = qx{ emacs --version 2>$devnull };
+};
+if($@) {
+  $emacs_found = '';
+  print STDERR "Problem with qx of emacs: $@\n" if $DEBUG;
+}
 
 if( not( $emacs_found ) ) {
   plan skip_all => 'emacs was not found in PATH';
@@ -23,16 +34,15 @@ if( not( $emacs_found ) ) {
   plan tests => 19;
 }
 
-use_ok( 'Emacs::Run' );
+use_ok( $CLASS );
 
 ok(1, "Traditional: If we made it this far, we're ok.");
 
-my $class = 'Emacs::Run';
 {
-  my $test_name = "Testing basic creation of object of $class";
-  my $obj  = $class->new();
+  my $test_name = "Testing basic creation of object of $CLASS";
+  my $obj  = $CLASS->new();
   my $type = ref( $obj );
-  is( $type, $class, $test_name );
+  is( $type, $CLASS, $test_name );
 }
 
 {
