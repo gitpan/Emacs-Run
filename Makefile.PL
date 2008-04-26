@@ -7,6 +7,7 @@ WriteMakefile(
     VERSION_FROM      => 'lib/Emacs/Run.pm', # finds $VERSION
     PREREQ_PM         => {
                           Class::Base          => 0.03,
+                          IPC::Capture         => 0,
 #                          IPC::Cmd             => 0,
                           Data::Dumper         => 0,
                           File::Spec           => 0,

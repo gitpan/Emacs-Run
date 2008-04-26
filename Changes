@@ -44,3 +44,7 @@ Revision history for Perl extension Emacs::Run.
       - Using File::Spec in lib_or_file rather than matching for '/'
       - Using File::Spec->devnull now in tests.
 
+0.08  Saturday April 26, 2008   2:02 AM
+      - Now (optionally) uses IPC::Capture in preference to
+        shelling out directly via qx.
+

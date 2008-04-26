@@ -51,6 +51,8 @@ Emacs::Run - use emacs from perl via the shell
    perl -MEmacs::Run -MData::Dumper -e'my $er=Emacs::Run->new; print Dumper( $er->get_load_path ), "\n"';
 
 
+   ### TODO add example of use of redirector
+
 
 =head1 DESCRIPTION
 
@@ -58,8 +60,7 @@ Emacs::Run is a module that provides utilities to work with
 emacs when run from perl as an external process.
 
 The emacs "editor" has some command-line options ("--batch" and so
-on) that allow you to run elisp code non-interactively: essentially
-these turn emacs into a lisp interpreter.
+on) that turn emacs into a lisp interpreter for the elisp dialect.
 
 This module provides methods to allow perl code to easily use these
 features of emacs for two types of tasks:
@@ -95,9 +96,11 @@ use File::Spec;
 use List::Util      qw( first );
 use Env             qw( $HOME );
 use List::MoreUtils qw( any );
-# use IPC::Cmd        qw( can_run run );
 
-our $VERSION = '0.08';
+# switching to a require done during init:
+# use IPC::Capture;
+
+our $VERSION = '0.09';
 my $DEBUG = 0;
 
 # needed for accessor generation
@@ -116,62 +119,58 @@ to the names of the object attributes. These attributes are:
 
 =item emacs_path
 
-By default, this code looks for an external program called 'emacs' in a
-location listed in the shell's PATH environment variable.  If you have
-multiple emacsen installed in different places and/or under different
-names, you can choose which one will be used by setting this attribute.
+By default, this code looks for an external program called 'emacs'
+letting the system (e.g. the shell's PATH environment variable) find
+the program if it can. If you have multiple emacsen installed in
+different places and/or under different names, you can choose which
+one will be used by setting this attribute.
 
-=item shell_output_director
+=item ipc_capture_handle
 
-Note: this is feature is most likely going to change in it's
-behavior in the next release (after switching over to using
-L<IPC::Capture>).
+The L<IPC::Capture> handle, now used by default to run shell commands.
 
-The B<shell_output_director> (sometimes called B<sod> for short) is a
-string appended to all of the internally generated emacs invocation
-commands to control what happens to output.  This is object attribute
-is the value used by the elisp evaluation methods documented below,
-unless another value is specified.
+=item redirector
 
-Most methods here accept a hash reference of options that can include
-their own B<shell_output_director> setting.
+A code that specifies how (by default) to handle the STDOUT and
+STDERR streams from elisp run by methods such as L</eval_elisp>
+and L</run_elisp_on_file>, when L<IPC::Capture> is in use.
 
-Typical values (on a unix-like system) are:
+As of this writing (version 0.09), this may be one of three values
+(for details on each of these, see L<IPC::Capture>):
 
 =over
 
-=item  '2>&1'
+=item stdout_only
 
-Intermix STDOUT and STDERR (in elisp: both "message" and "print"
-functions work).  This is the default setting for this object
-attribute.
+=item stderr_only
 
-=item  '2>/dev/null'
-
-return only STDOUT, throwing away STDERR (in elisp: get output
-only from "print")
-
-=item  "> $file 2>&1"
-
-send all output to the file $file
-
-=item  ">> $file 2>&1"
-
-append all output to the file $file, preserving any existing
-content.
-
-=item  "2 > $log_file"
-
-return only STDOUT, but save STDERR to $log_file
+=item all_output
 
 =back
+
+Note that the somewhat unusual B<all_separated> redirector setting
+is not supported by this module.
+
+=item use_shell_directly
+
+Flag to indicate you always want to shell out directly rather than
+use L<IPC::Capture>.
+
+=item shell_output_director
+
+The analog of the L</redirector> for when using the shell directly:
+a Bourne shell redirection code (ala '2>&1').
+
+Setting this also causes L</use_shell_directly> to be set.
+
+See L</Controlling Output Redirection>.
 
 =item before_hook
 
 A string inserted into the built-up emacs commands immediately
 after "--batch", but before any thing else is executed.
 This is a good place to insert additional invocation options
-such as "--multibyte" or "--unibyte".
+such as "--multibyte" or "--unibyte".  See </append_to_before_hook>.
 
 =item load_emacs_init
 
@@ -331,11 +330,40 @@ sub init {
                        before_hook
                        ec_lib_loader
                        shell_output_director
+
+                       use_shell_directly
+
+                       ipc_capture_handle
+                       redirector
                       );
 
   foreach my $field (@attributes) {
     $ATTRIBUTES{ $field } = 1;
     $self->{ $field } = $args->{ $field };
+  }
+
+  # if the shell_output_director has been set, we fall back to using the shell directly
+  if ($self->{ shell_output_director }) {
+    $self->{ use_shell_directly } = 1;
+  }
+
+  # by default, we intermix STDOUT and STDERR
+  $self->{ shell_output_director } ||= '2>&1';
+  $self->{ redirector }            ||= 'all_output';
+
+  # We will attempt to load IPC::Capture, if that fails, fall back to
+  # "use_shell_directly"... but don't bother trying this at all if
+  # we already know we're doing it that way.
+  unless ( $self->{ use_shell_directly } ) {
+    eval "require IPC::Capture";
+    if ( not( $@ )) {
+      my $ich = IPC::Capture->new();
+      $ich->set_filter( $self->{ redirector } );
+      $self->{ ipc_capture_handle } ||= $ich;
+    } else {
+      $self->debug("Could not require IPC::Capture: $@");
+      $self->{ use_shell_directly } = 1;
+    }
   }
 
   # Define attributes (apply defaults, etc)
@@ -365,8 +393,6 @@ sub init {
 
   $self->{ default_priority } ||= 'requested';
 
-  $self->{ shell_output_director } ||= '2>&1'; # intermix STDOUT and STDERR by default
-
   # preserving any given lib_data in the event of a need to reset.
   $self->{lib_data_initial} = $self->{ lib_data };
 
@@ -380,43 +406,89 @@ sub init {
   return $self;
 }
 
-=item get_load_path
+=back
 
-Returns the load-path from emacs (by default, using the
-user's .emacs, if it can be found) as a reference to a perl array.
+=head2 Simple Emacs Invocations
 
-Changing the $HOME environment variable before running this method
-results in loading the .emacs file located in the new $HOME.
+Some simple methods for obtaining information from your
+emacs installation.
 
-By default the returned output includes just STDOUT and not STDERR
-(and the object attribute L</shell_output_director> is ignored),
-but this behavior can be overridden by setting a field named
-B<shell_output_director> in the options hashref.
+These methods default to returning STDOUT, suppressing anything
+sent to STDERR.  This behavior can be overridden: see
+L</Controlling Output Redirection>.
 
-An example of that usage:
+=over
 
-  my $returned_string =
-    $er->get_load_path(  { shell_output_director => '2>&1',
-                         } );
+=item eval_function
+
+Given the name of an emacs function, this runs the function and
+returns the value from emacs (when started with the the .emacs
+located in $HOME, if one is found).  After the function name, an
+optional array reference may be supplied to pass through a list
+of simple arguments (limited to strings) to the elisp function.
+And further, an optional hash reference may follow that to
+specify options to the "eval_function" method.
+
+By default the returned output is STDOUT only but this behavior
+can be overridden: See L</Controlling Output Redirection>.
+
+As with L</get_variable>, this uses the emacs 'print' function
+internally.
+
+Examples:
+
+  my $name  = $er->eval_function( 'user-full-name' );
+
+  $er->eval_function( 'extract-doctrings-generate-html-for-elisp-file',
+                      [ "$input_elisp_file",
+                        "$output_file",
+                        "The extracted docstrings" ] );
 
 =cut
 
-sub get_load_path {
-  my $self = shift;
-  my $opts = shift;
+sub eval_function {
+  my $self     = shift;
+  my $funcname = shift;
+  my $arg2     = shift;
+  my $subname = ( caller(0) )[3];
+
   my $devnull = File::Spec->devnull();
-  my $sod = $opts->{ shell_output_director } || "2>$devnull";
 
-#  my $sod =
-#    $opts->{ shell_output_director } || $self->shell_output_director;
+  my ($passthroughs, $opts, $passthru);
+  if (ref( $arg2 ) eq 'ARRAY') {
+    $passthroughs = $arg2;
+    $passthru = join " ", map{ qq{"$_"} } @{ $passthroughs };
+    $opts = shift;
+  } elsif (ref( $arg2 ) eq 'HASH') {
+    $opts     = $arg2;
+  }
 
-  my $elisp = q{ (print (mapconcat 'identity load-path "\n")) };
-  my $return = $self->eval_elisp( $elisp, {
+  my $redirector = $opts->{ redirector } || "stdout_only";
+  my $sod =
+    $opts->{ shell_output_director }                   ||
+    $self->redirector_to_sod( $redirector )            ||
+    "2>$devnull";
+  my $use_shell_directly = $self->use_shell_directly || $opts->{ shell_output_director };
+
+  my $elisp;
+  if( $passthru ) {
+    $elisp = qq{ (print ($funcname $passthru)) };
+  } else {
+    $elisp = qq{ (print ($funcname)) };
+  }
+
+  my $return;
+  if( $use_shell_directly ) {
+    $return = $self->eval_elisp( $elisp, {
                                            shell_output_director => $sod,
                                           } );
+  } else {
+    $return = $self->eval_elisp( $elisp, {
+                                          redirector => $redirector,
+                                          } );
+  }
 
-  my @load_path = split /\n/, $return;
-  \@load_path;
+  return $return;
 }
 
 =item get_variable
@@ -433,17 +505,7 @@ the "load-path" variable might look like:
 
   ("/home/grunt/lib" "/usr/lib/emacs/site-lisp" "/home/xtra/lib")
 
-By default the returned output includes just STDOUT and not STDERR
-(and the object attribute L</shell_output_director> is ignored),
-but this behavior can be overridden by setting a field named
-B<shell_output_director> in the options hashref.
-
-An example of that usage:
-
-  my $returned_string =
-    $er->get_variable( 'user-mail-address', {
-                                              shell_output_director => '2>&1',
-                                            } );
+See L</get_load_path> below for a more perl-friendly way of doing this.
 
 =cut
 
@@ -452,88 +514,66 @@ sub get_variable {
   my $varname = shift;
   my $opts    = shift;
   my $devnull = File::Spec->devnull();
-  my $sod = $opts->{ shell_output_director } || "2>$devnull";
+  my $redirector = $opts->{ redirector } || "stdout_only";
+  my $sod =
+    $opts->{ shell_output_director }                   ||
+    $self->redirector_to_sod( $redirector )            ||
+    "2>$devnull";
+  my $use_shell_directly = $self->use_shell_directly || $opts->{ shell_output_director };
 
   my $subname = ( caller(0) )[3];
 
   my $elisp = qq{ (print $varname) };
 
   my $return;
-  if ($sod) {
+  if( $use_shell_directly ) {
     $return = $self->eval_elisp( $elisp, {
                                            shell_output_director => $sod,
                                           } );
   } else {
-    $return = $self->eval_elisp_skip_err( $elisp );  # backwards compatibility.  remove? TODO
+    $return = $self->eval_elisp( $elisp, {
+                                          redirector => $redirector,
+                                          } );
   }
   return $return;
 }
 
-=item eval_function
+=item get_load_path
 
-Given the name of an emacs function, this runs the function (without
-arguments) and returns the value from emacs (when started with the
-the .emacs located in $HOME, if one is found).  After the function
-name, an optional array reference may be supplied to pass through a
-list of simple arguments (limited to strings) to the elisp function.
-And further, an optional hash reference may follow that to specify
-options to the "eval_function" method.
+Returns the load-path from emacs (by default, using the
+user's .emacs, if it can be found) as a reference to a perl array.
 
-By default the returned output includes just STDOUT and not STDERR
-(and the object attribute L</shell_output_director> is ignored),
-but this behavior can be overridden by setting a field named
-B<shell_output_director> in the options hashref.
-
-As with L</get_variable>, this uses the emacs 'print'
-function internally.
-
-Examples:
-
-  my $name  = $er->eval_function( 'user-full-name' );
-
-  $er->eval_function( 'extract-doctrings-generate-html-for-elisp-file',
-                      [ "$input_elisp_file",
-                        "$output_file",
-                        "The extracted docstrings" ] );
-
+Changing the $HOME environment variable before running this method
+results in loading the .emacs file located in the new $HOME.
 
 =cut
 
-sub eval_function {
-  my $self     = shift;
-  my $funcname = shift;
-  my $arg2     = shift;
-  my $subname = ( caller(0) )[3];
-
-  my ($passthroughs, $opts, $passthru);
-  if (ref( $arg2 ) eq 'ARRAY') {
-    $passthroughs = $arg2;
-    $passthru = join " ", map{ qq{"$_"} } @{ $passthroughs };
-    $opts = shift;
-  } elsif (ref( $arg2 ) eq 'HASH') {
-    $opts     = $arg2;
-  }
-
+sub get_load_path {
+  my $self = shift;
+  my $opts = shift;
   my $devnull = File::Spec->devnull();
-  my $sod = $opts->{ shell_output_director } || "2>$devnull";
+  my $redirector = $opts->{ redirector } || "stdout_only";
+  my $sod =
+    $opts->{ shell_output_director }                   ||
+    $self->redirector_to_sod( $redirector )            ||
+    "2>$devnull";
+  my $use_shell_directly = $self->use_shell_directly || $opts->{ shell_output_director };
 
-  my $elisp;
-  if( $passthru ) {
-    $elisp = qq{ (print ($funcname $passthru)) };
-  } else {
-    $elisp = qq{ (print ($funcname)) };
-  }
+  my $elisp = q{ (print (mapconcat 'identity load-path "\n")) };
 
   my $return;
-  if ($sod) {
+  if( $use_shell_directly ) {
     $return = $self->eval_elisp( $elisp, {
-                                           shell_output_director => $sod,
-                                          } );
+                                          shell_output_director => $sod,
+                                         } );
   } else {
-    $return = $self->eval_elisp_skip_err( $elisp );  # backwards compatibility.  remove? TODO
+    $return = $self->eval_elisp( $elisp, {
+                                          redirector => $redirector,
+                                         } );
   }
 
-  return $return;
+  my @load_path = split /\n/, $return;
+  \@load_path;
 }
 
 
@@ -549,6 +589,8 @@ if it exists, and false (0) otherwise.
 sub probe_for_option_no_splash {
   my $self = shift;
   my $subname = ( caller(0) )[3];
+  my $ich = $self->ipc_capture_handle;
+  my $use_shell_directly = $self->use_shell_directly;
 
   my $emacs       = $self->emacs_path;
   my $before_hook = $self->before_hook;
@@ -558,12 +600,26 @@ sub probe_for_option_no_splash {
     return 0; # xemacs has no --no-splash
   }
 
-  my $emacs_cmd = qq{ $emacs --batch $before_hook 2>&1 };
+  my $retval;
+  # if use_shell_directly set, we do things the old way
+  if( $use_shell_directly ) {
+    my $sod = '2>&1';
+    my $cmd = qq{ $emacs --batch $before_hook $sod };
+    $self->debug("$subname: cmd: $cmd\n");
+    $retval = qx{ $cmd };
+    $retval = $self->clean_return_value( $retval );
+  } else {
+    my $cmd = qq{ $emacs --batch $before_hook };
+    $self->debug("$subname: cmd: $cmd\n");
+    $ich->set_filter('all_output');
+    $retval = $ich->run( $cmd );
+    $retval = $self->clean_return_value( $retval );
 
-  $self->debug("$subname: emacs_cmd: $emacs_cmd\n");
-
-  my $retval = qx{ $emacs_cmd };
-  $retval = $self->clean_return_value( $retval );
+    unless( $ich->success ) {
+      $self->debug("$subname: ipc capture call failed on: $cmd");
+      $retval = '';
+    }
+  }
 
   my $last_line = ( split /\n/, $retval )[-1] || '';
 
@@ -580,10 +636,9 @@ sub probe_for_option_no_splash {
 
 =back
 
-=head2 running elisp
+=head2 Running Elisp
 
-These are a set of general methods that run pieces of
-emacs lisp code in different ways.
+These are general methods that run pieces of emacs lisp code.
 
 The detailed behavior of these methods have a number of things
 in common:
@@ -600,8 +655,9 @@ been turned off, it will not try to load the .emacs file.
 
 Unless specified otherwise, the methods return the
 output from the elisp code with STDOUT and STDERR
-mixed together, though this can be overridden with the
-shell_output_director field of an options hashref.
+mixed together, though this behavior can be overridden.
+See L</Controlling Output Redirection>.
+
 (The advanatage of intermixing STDOUT and STDERR is that the
 emacs functions 'message' and 'print' both work to generate
 output. The disadvantage is that you may have inane messages
@@ -621,13 +677,20 @@ Example:
 =cut
 
 sub eval_elisp {
-  my $self  = shift;
-  my $elisp = shift;
+  my $self     = shift;
+  my $elisp    = shift;
   my $opts     = shift;
   my $subname  = ( caller(0) )[3];
 
+  my $ich = $self->ipc_capture_handle;
+
+  my $redirector = $opts->{ redirector } || $self->redirector;
   my $sod =
-    $opts->{ shell_output_director } || $self->shell_output_director;
+      $opts->{ shell_output_director }                    ||
+      $self->redirector_to_sod( $opts->{ redirector } )   ||
+      $self->shell_output_director                        ||
+      $self->redirector_to_sod( $self->redirector );
+  my $use_shell_directly = $self->use_shell_directly || $opts->{ shell_output_director };
 
   $elisp = $self->quote_elisp( $elisp );
 
@@ -637,52 +700,31 @@ sub eval_elisp {
   my $ec_head = qq{ $emacs --batch $before_hook };
   my $ec_tail = qq{ --eval "$elisp" };
   my $ec_lib_loader = $self->set_up_ec_lib_loader;
-  my $emacs_cmd = "$ec_head $ec_lib_loader $ec_tail $sod";
 
-  $self->debug("$subname: emacs_cmd:\n $emacs_cmd\n");
+  my $retval;
+  if( $use_shell_directly ) {
+    my $cmd = "$ec_head $ec_lib_loader $ec_tail $sod";
+    $self->debug("$subname: cmd:\n $cmd\n");
 
-  my $return = qx{ $emacs_cmd };
-  $return = $self->clean_return_value( $return );
+    $retval = qx{ $cmd };
+    $retval = $self->clean_return_value( $retval );
+  } else {
+    my $cmd = "$ec_head $ec_lib_loader $ec_tail";
+    $self->debug("$subname: cmd:\n $cmd\n");
 
-  $self->debug( "$subname return:\n===\n$return\n===\n" );
+    $ich->set_filter( $redirector);
+    $retval = $ich->run( $cmd );
+    $retval = $self->clean_return_value( $retval );
 
-  return $return;
-}
+    unless( $ich->success ) {
+      $self->debug("$subname: ipc capture call failed on: $cmd");
+      $retval = '';
+    }
+  }
 
+  $self->debug( "$subname retval:\n===\n$retval\n===\n" );
 
-=item eval_elisp_skip_err
-
-Similar to L</eval_elisp>, except that it always returns only
-the standard output, ignoring any messages sent to STDERR.
-
-This is essentially for backwards compatibility, though it
-might be useful as a convenience method to avoid sodding about
-with the L</shell_output_director>.
-
-=cut
-
-sub eval_elisp_skip_err {
-  my $self = shift;
-  my $elisp = shift;
-  my $subname = ( caller(0) )[3];
-  $elisp = $self->quote_elisp( $elisp );
-
-  my $emacs = $self->emacs_path;
-  my $before_hook = $self->before_hook;
-
-  my $ec_head = qq{ $emacs --batch $before_hook };
-  my $ec_tail = qq{ --eval "$elisp" };
-  my $ec_lib_loader = $self->set_up_ec_lib_loader;
-  my $emacs_cmd = "$ec_head $ec_lib_loader $ec_tail";
-
-  $self->debug("$subname: emacs_cmd:\n $emacs_cmd\n");
-
-  my $return = qx{ $emacs_cmd };
-  $return = $self->clean_return_value( $return );
-
-  $self->debug( "$subname return:\n===\n$return\n===\n" );
-
-  return $return;
+  return $retval;
 }
 
 =item run_elisp_on_file
@@ -705,8 +747,17 @@ sub run_elisp_on_file {
   my $opts     = shift;
   my $subname  = ( caller(0) )[3];
 
+  my $ich = $self->ipc_capture_handle;
+
+  my $redirector = $opts->{ redirector } || $self->redirector;
+
   my $sod =
-    $opts->{ shell_output_director } || $self->shell_output_director;
+      ( $opts->{ shell_output_director }                   ) ||
+      ( $self->redirector_to_sod( $opts->{ redirector } )  ) ||
+      ( $self->shell_output_director                       ) ||
+      ( $self->redirector_to_sod( $self->redirector )      );
+
+  my $use_shell_directly = $self->use_shell_directly || $opts->{ shell_output_director };
 
   $elisp = $self->quote_elisp( $elisp );
 
@@ -724,28 +775,42 @@ sub run_elisp_on_file {
   my $ec_head = qq{ $emacs --batch $before_hook --file='$filename' };
   my $ec_tail = qq{ --eval "$elisp" -f save-buffer };
   my $ec_lib_loader = $self->ec_lib_loader;
-  my $emacs_cmd = "$ec_head $ec_lib_loader $ec_tail $sod";
 
-  $self->debug("$subname: emacs_cmd: $emacs_cmd\n");
+  my $retval;
+  if( $use_shell_directly ) {
+    my $cmd = "$ec_head $ec_lib_loader $ec_tail $sod";
+    $self->debug("$subname: cmd: $cmd\n");
+    $retval = qx{ $cmd };
+    $retval = $self->clean_return_value( $retval );
 
-  my $return = qx{ $emacs_cmd };
-  $return = $self->clean_return_value( $return );
+  } else {
+    my $cmd = "$ec_head $ec_lib_loader $ec_tail $sod";
+    $self->debug("$subname: cmd: $cmd\n");
+    $ich->set_filter( $redirector);
+    $retval = $ich->run( $cmd );
+    $retval = $self->clean_return_value( $retval );
 
-  $self->debug( "$subname return:\n===\n$return\n===\n" );
+    unless( $ich->success ) {
+      $self->debug("$subname: ipc capture call failed on: $cmd");
+      $retval = '';
+    }
+  }
 
-  return $return;
+  $self->debug( "$subname retval:\n===\n$retval\n===\n" );
+
+  return $retval;
 }
 
 
 =back
 
-=head1 internal methods
+=head1 INTERNAL METHODS
 
 The following methods are intended primarily for internal use.
 
 Note: the common "leading underscore" naming convention is not used here.
 
-=head2 utility methods
+=head2 Utility Methods
 
 =over
 
@@ -769,12 +834,6 @@ sub quote_elisp {
   my $self = shift;
   my $elisp = shift;
 
-# TODO consider adding this hack:
-#   if ($elisp =~ m{\\\\"}xms) {
-#     warn "quote_elisp refusing to quote because it looks like it was done already: $elisp";
-#     return $elisp;
-#   };
-
   $elisp =~ s{"}{\\"}xmsg; # add one backwhack to the double-quotes
   return $elisp;
 }
@@ -785,7 +844,9 @@ Cleans up a given string, trimming unwanted leading and trailing
 blanks and double quotes.
 
 This is intended to be used with elisp that uses the 'print'
-function.
+function.  Note that it is limited to elisp with a single print
+of a result: multiple prints will leave embedded quote-newline
+pairs in the output.
 
 =cut
 
@@ -797,9 +858,38 @@ sub clean_return_value {
   return $string;
 }
 
+
+
+=item redirector_to_sod
+
+Convert a redirector code into the equivalent shell_output_director
+(Bourne shell).
+
+=cut
+
+sub redirector_to_sod {
+  my $self       = shift;
+  my $redirector = shift;
+  my $devnull = File::Spec->devnull;
+
+  unless ( $redirector ) {
+    return;
+  }
+
+  my $sod;
+  if( $redirector eq 'stdout_only' ) {
+    $sod = "2>$devnull";
+  } elsif ( $redirector eq 'stderr_only' ) {
+    $sod = "1>$devnull 2>&1";  # TODO check
+  } elsif ( $redirector eq 'all_output' ) {
+    $sod = '2>&1';
+  }
+  return $sod;
+}
+
 =back
 
-=head2 initialization phase methods
+=head2 Initialization Phase Methods
 
 The following routines are largely used internally in the
 object initialization phase.
@@ -903,7 +993,8 @@ sub set_up_ec_lib_loader {
       $rec->[1]->{priority} = $priority;
     }
 
-    my $method = sprintf "genec_loader_%s_%s", $type, $priority;
+    my $method = sprintf
+      "genec_loader_%s_%s", $type, $priority;
     $self->$method( $name );   # appends to ec_lib_loader
   }
 
@@ -912,55 +1003,12 @@ sub set_up_ec_lib_loader {
   return $ec_lib_loader;
 }
 
-=item lib_or_file
+=item Generation of Emacs Command Strings to Load Libraries
 
-Given the name of an emacs library, examine it to see if it
-looks like a file system path, or an emacs library (technically
-a "feature name", i.e. sans path or extension).
-
-Returns a string, either "file" or "lib".
-
-=cut
-
-sub lib_or_file {
-  my $self = shift;
-  my $name = shift;
-
-  ### TODO portability.  Abuse File::Spec->splitpath?
-  # my $path_found = ( $name =~ m{/}xms );
-
-  my $path_found;
-  my ($volume,$directories,$file) = File::Spec->splitpath( $name );
-  if( $directories || $volume ) {
-    $path_found = 1;
-  }
-
-  my $ext_found =  ( $name =~ m{\.el[c]?$}xms );
-
-  my $type;
-#   if (($path_found) && ($ext_found)) {
-#     $type = 'file';
-#   } els
-
-  if ($path_found) {
-    $type = 'file';
-  } elsif ($ext_found) {
-    $type = 'file';
-  } else {
-    $type = 'lib';
-  }
-  return $type;
-}
-
-=back
-
-=head2 generation of emacs command strings to load libraries
-
-These are routines that generate a string that can be
-included in an emacs command line invocation to load
-certain libraries.
-
-Note the naming convention: "generate emacs command-line" => "genec_".
+These are routines run by L</set_up_ec_lib_loader> that generate a
+string that can be included in an emacs command line invocation to
+load certain libraries. Note the naming convention: "generate emacs
+command-line" => "genec_".
 
 =over
 
@@ -1010,17 +1058,17 @@ sub genec_load_emacs_init {
   return $ec_lib_loader;
 }
 
-=back
+=item Genec Methods Called Dynamically
 
-The following is a set of four routines to generate a
-string that can be included in an emacs command line
-invocation to load the given library.  The methods here
-are named according to the pattern:
+The following is a set of four routines used by
+L</set_ec_lib_loader> to generate a string that can be included in
+an emacs command line invocation to load the given library.
+The methods here are named according to the pattern:
 
   "genec_loader_$type_$priority"
 
 All of these methods return the generated string, but also append it
-to the L</ec_lib_loader> attribute,
+to the L</ec_lib_loader> attribute.
 
 =over
 
@@ -1028,6 +1076,7 @@ to the L</ec_lib_loader> attribute,
 
 =cut
 
+# used by set_up_ec_lib_loader
 sub genec_loader_lib_needed {
   my $self = shift;
   my $name = shift;
@@ -1036,7 +1085,8 @@ sub genec_loader_lib_needed {
     return;
   }
 
-  my $ec = qq{ -l "$name" };  ### TODO names are not allowed to contain double-quotes then? (fix)
+  my $ec = qq{ -l "$name" };
+  # TODO what happens with names that contain double-quotes?
 
   $self->append_to_ec_lib_loader( $ec );
   return $ec;
@@ -1046,6 +1096,7 @@ sub genec_loader_lib_needed {
 
 =cut
 
+# used by set_up_ec_lib_loader
 sub genec_loader_file_needed {
   my $self = shift;
   my $name = shift;
@@ -1066,6 +1117,7 @@ sub genec_loader_file_needed {
 
 =cut
 
+# used by set_up_ec_lib_loader
 sub genec_loader_lib_requested {
   my $self = shift;
   my $name = shift;
@@ -1083,6 +1135,7 @@ sub genec_loader_lib_requested {
 
 =cut
 
+# used by set_up_ec_lib_loader
 sub genec_loader_file_requested {
   my $self = shift;
   my $name = shift;
@@ -1100,6 +1153,8 @@ sub genec_loader_file_requested {
   $self->append_to_ec_lib_loader( $ec );
   return $ec;
 }
+
+=back
 
 =back
 
@@ -1142,28 +1197,41 @@ sub probe_emacs_version {
   my $self = shift;
   my $opts = shift;
   my $subname = ( caller(0) )[3];
-
   my $devnull = File::Spec->devnull();
-  my $sod = $opts->{ shell_output_director } || "2>$devnull";
+
+  my $ich        = $self->ipc_capture_handle;
+
+  my $redirector = $opts->{ redirector } || $self->redirector;
+  my $sod =
+    $opts->{ shell_output_director }           ||
+      $self->redirector_to_sod( $redirector )  ||
+      "2>$devnull";
+
+  my $use_shell_directly = $self->use_shell_directly || $opts->{ shell_output_director };
 
   my $emacs = $self->emacs_path;
 
-  my $cmd = "$emacs --version $sod";
-  my $text = qx{ $cmd };
+  my $retval;
+  if( $use_shell_directly ) {
+    my $cmd = "$emacs --version $sod";
+    $retval = qx{ $cmd };
+  } else {
 
-  # not using sod (but why not?)  TODO
-  # my $cmd = "$emacs --version";
-  # my $text = qx{ $cmd };
-  #
+    my $cmd = "$emacs --version";
 
-  # IPC::Cmd experiment
-  # my( $success, $error_code, $full_buf, $stdout_buf, $stderr_buf ) =
-  #   run( command => $cmd, verbose => 0 );
-  # my $text = $stdout_buf->[0];
+    $ich->set_filter( $redirector );
+    $retval = $ich->run( $cmd );
 
-  $self->debug( "$subname:\n $text\n" );
+    unless( $ich->success ) {
+      $self->debug("$subname: ipc capture call failed on: $cmd");
+      return;
+    }
 
-  my $version = $self->parse_emacs_version_string( $text );
+  }
+
+  $self->debug( "$subname:\n $retval\n" );
+
+  my $version = $self->parse_emacs_version_string( $retval );
   return $version;
 }
 
@@ -1197,7 +1265,7 @@ sub parse_emacs_version_string {
   my $version_mess   = shift;
 
   my ($emacs_type, $version);
-  # TODO presumption is versions are digits only (\d). Ever have letters, e.g. 'b'?
+  # TODO assuming versions are digits only (\d). Ever have letters, e.g. 'b'?
   if (      $version_mess =~ m{^ ( GNU \s+ Emacs ) \s+ ( [\d.]* ) }xms ) {
     $emacs_type = $1;
     $version    = $2;
@@ -1206,6 +1274,7 @@ sub parse_emacs_version_string {
     $version    = $2;
   } else {
     $emacs_type ="not so gnu, not xemacs either";
+    $version    = ''; # silence uninitialized value warnings
   }
   $self->debug( "version: $version\n" );
 
@@ -1214,7 +1283,12 @@ sub parse_emacs_version_string {
 
   my (@v) = split /\./, $version;
 
-  my $major_version = $v[0];
+  my $major_version;
+  if( defined( $v[0] ) ) {
+    $major_version = $v[0];
+  } else {
+    $major_version = ''; # silence unitialized value warnings
+  }
   $self->set_emacs_major_version( $major_version );
   $self->debug( "major_version: $major_version\n" );
 
@@ -1223,7 +1297,7 @@ sub parse_emacs_version_string {
 
 =back
 
-=head2 internal utilities (used by initialization code)
+=head2 Utilities Used by Initialization
 
 =over
 
@@ -1291,25 +1365,42 @@ Returns the library name ('site-start') if found, undef if not.
 
 sub detect_site_init {
   my $self = shift;
+  my $opts = shift;
   my $subname = ( caller(0) )[3];
+  my $ich = $self->ipc_capture_handle;
 
-  my $emacs = $self->emacs_path;
+  my $redirector = $opts->{ redirector } || 'all_output';
+  my $sod = $opts->{ shell_output_director }    ||
+       $self->redirector_to_sod( $redirector )  ||
+       '2>&1';
+  my $use_shell_directly = $self->use_shell_directly || $opts->{ shell_output_director };
+
+  my $emacs       = $self->emacs_path;
   my $before_hook = $self->before_hook;
+  my $lib_name    = 'site-start';
 
-  my $lib_name = 'site-start';
-  my $emacs_cmd = qq{ $emacs --batch $before_hook -l $lib_name 2>&1 };
+  my $retval;
+  if( $use_shell_directly ) {
+    my $cmd = qq{ $emacs --batch $before_hook -l $lib_name $sod };
+    $self->debug("$subname cmd:\n $cmd\n");
+    $retval = qx{ $cmd };
+  } else {
+    my $cmd = qq{ $emacs --batch $before_hook -l $lib_name };
+    $ich->set_filter( $redirector);
+    $retval = $ich->run( $cmd );
 
-  $self->debug("$subname emacs_cmd:\n $emacs_cmd\n");
+    unless( $ich->success ) {
+      $self->debug("$subname: ipc capture call failed on: $cmd");
+      return;
+    }
 
-  my $return = qx{ $emacs_cmd };
+  }
 
-  $self->debug("$subname return:\n $return\n");
+  $self->debug("$subname retval:\n $retval\n");
 
-#  my $last_line = ( split /\n/, $return )[-1] || '';
-#  if ( $last_line =~ m{^\s*Cannot open load file:} ) {
-
-  if ( defined( $return ) &&
-       $return =~ m{\bCannot \s+ open \s+ load \s+ file: \s+ $lib_name \b}xms ) {
+  if ( defined( $retval ) &&
+       $retval =~
+         m{\bCannot \s+ open \s+ load \s+ file: \s+ $lib_name \b}xms ) {
     return;
   } else {
     return $lib_name;
@@ -1338,32 +1429,90 @@ Example usage:
 sub detect_lib {
   my $self         = shift;
   my $lib          = shift;
+  my $opts         = shift;
+  my $subname = (caller(0))[3];
 
   return unless $lib;
 
-  my $emacs = $self->emacs_path;
+  my $ich = $self->ipc_capture_handle;
+
+  my $redirector = $opts->{ redirector } || 'all_output';
+  my $sod = $opts->{ shell_output_director }    ||
+       $self->redirector_to_sod( $redirector )  ||
+       '2>&1';
+  my $use_shell_directly = $self->use_shell_directly || $opts->{ shell_output_director };
+
+  my $emacs       = $self->emacs_path;
   my $before_hook = $self->before_hook;
   my $ec_head = qq{ $emacs --batch $before_hook };
-  # emacs_cmd string to load existing, presumably vetted, libs
+  # cmd string to load existing, presumably vetted, libs
   my $ec_lib_loader = $self->ec_lib_loader;
 
-  my $ec_tail = qq{ 2>&1 };
+  my $retval;
+  if( $use_shell_directly ) {
+    my $cmd = qq{ $ec_head $ec_lib_loader -l $lib $sod};
+    $retval = qx{ $cmd };
+  } else {
+    my $cmd = qq{ $ec_head $ec_lib_loader -l $lib};
+    $ich->set_filter( $redirector);
+    $retval = $ich->run( $cmd );
 
-  my $emacs_cmd = qq{ $ec_head $ec_lib_loader -l $lib $ec_tail};
-  $self->debug("emacs_cmd: $emacs_cmd\n");
-  my $return = qx{ $emacs_cmd };
+    unless( $ich->success ) {
+      $self->debug("$subname: ipc capture call failed on: $cmd");
+      return;
+    }
 
-  if ( defined( $return ) &&
-       $return =~ m{\bCannot \s+ open \s+ load \s+ file: \s+ $lib \b}xms ) {
+  }
+
+  if ( defined( $retval ) &&
+       $retval =~ m{\bCannot \s+ open \s+ load \s+ file: \s+ $lib \b}xms ) {
     return;
   } else {
     return $lib;
   }
 }
 
+
+=item lib_or_file
+
+Given the name of an emacs library, examine it to see if it
+looks like a file system path, or an emacs library (technically
+a "feature name", i.e. sans path or extension).
+
+Returns a string, either "file" or "lib".
+
+=cut
+
+sub lib_or_file {
+  my $self = shift;
+  my $name = shift;
+
+  my $path_found;
+  my ($volume,$directories,$file) = File::Spec->splitpath( $name );
+  if( $directories || $volume ) {
+    $path_found = 1;
+  }
+
+  my $ext_found =  ( $name =~ m{\.el[c]?$}xms );
+
+  my $type;
+  if ($path_found) {
+    $type = 'file';
+  } elsif ($ext_found) {
+    $type = 'file';
+  } else {
+    $type = 'lib';
+  }
+  return $type;
+}
+
+
 =back
 
-=head2 routines in use by Emacs::Run::ExtractDocs
+=head2 Routines in Use by Some External Libraries
+
+These aren't expected to be generally useful methods, but
+they are in use by some code (notably L<Emacs::Run::ExtractDocs>).
 
 =over
 
@@ -1374,6 +1523,7 @@ shelling out to emacs in batch mode.
 
 =cut
 
+# used externally by Emacs::Run::ExtractDocs
 sub elisp_file_from_library_name_if_in_loadpath {
   my $self    = shift;
   my $library = shift;
@@ -1414,6 +1564,7 @@ path included, but the library name can not.
 
 =cut
 
+# used externally by Emacs::Run::ExtractDocs
 sub generate_elisp_to_load_library {
   my $self = shift;
   my $arg  = shift;
@@ -1438,7 +1589,7 @@ sub generate_elisp_to_load_library {
 
 =back
 
-=head2 basic setters and getters
+=head2 Basic Setters and Getters
 
 The naming convention in use here is that setters begin with
 "set_", but getters have *no* prefix: the most commonly used case
@@ -1449,7 +1600,7 @@ documented with the L</new> method (but note that these exist even for
 "internal" attributes that are not expected to be useful to the client
 coder).
 
-=head2 special accessors
+=head2 Special Accessors
 
 =over
 
@@ -1586,18 +1737,37 @@ sub push_emacs_libs {
   return $emacs_libs;
 }
 
-
-
 =back
 
-=head2  automatic generation of standard accessors
+=item set_use_shell_directly
 
-=over
-
-=item AUTOLOAD
+Setter for object attribute L</set_use_shell_directly>.
+If this attribute is set to false, the system will
+attempt to load L<IPC::Capture>.
 
 =cut
 
+sub set_use_shell_directly {
+  my $self = shift;
+  my $use_shell_directly = shift;
+  $self->{ use_shell_directly } = $use_shell_directly;
+
+  unless ( $self->{ use_shell_directly } ) {
+    eval "require IPC::Capture";
+    if ( not( $@ )) {
+      my $ich = IPC::Capture->new();
+      $ich->set_filter( $self->{ redirector } );
+      $self->{ ipc_capture_handle } ||= $ich;
+    } else {
+      $self->debug("Could not require IPC::Capture: $@");
+      $self->{ use_shell_directly } = 1;
+    }
+  }
+
+  return $use_shell_directly;
+}
+
+# automatic generation of the basic setters and getters
 sub AUTOLOAD {
   return if $AUTOLOAD =~ /DESTROY$/;  # skip calls to DESTROY ()
 
@@ -1635,25 +1805,122 @@ sub AUTOLOAD {
 }
 
 
-
-
 1;
-#========
-# end of code
+
+###  end of code
 
 =back
+
+=head2 Controlling Output Redirection
+
+
+As described in the documentation for L</new>, the L</redirector> is
+a code used to control what happens to the output streams STDOUT and
+STDERR (or in elisp terms, the output from "print" or "message").
+
+These are as defined by the module L<IPC::Capture>: B<stdout_only>,
+B<stderr_only> or B<all_output>.
+
+The client programmer may not need to worry about the L</redirector> at
+all, since some (hopefully) sensible defaults have been chosen for the
+major methods here:
+
+  all_output   (using the object default)
+
+     eval_elisp
+     run_elisp_on_file
+
+  stdout_only  (special method-level defaults)
+
+     get_load_path
+     get_variable
+     eval_function
+
+In addition to the L</redirector> object attribute, there is
+a standard method attribute of the same name, which can typically
+be supplied via an options hash to temporarily override
+the object L</redirector> setting.
+
+If, for example, "eval_elisp" is returning some messages to STDERR
+that you'd rather filter out, you could do that in one of two ways:
+
+Changing the object-wide default:
+
+   my $er = Emacs::Run->new( { redirector => 'stdout_only' } );
+   my $result = $er->eval_elisp( $elisp_code );
+
+Using an option specific to this method call:
+
+   my $er = Emacs::Run->new();
+   my $result = $er->eval_elisp( $elisp_code, { redirector => 'stdout_only' } );
+
+If you needs some behavior not supported by these redirector codes,
+it is possible to use a Bourne-shell style redirect, like so:
+
+   # return stdout only, but maintain an error log file
+   my $er = Emacs::Run->new( { shell_output_director => "2>$logfile" } );
+   my $result = $er->eval_elisp( $elisp_code );
+
+Using the L</shell_output_director> (rather than the L</redirector>) implies
+shelling out directly, without going through L<IPC::Capture>: this might
+cause portability issues for some platforms, though these days it should work
+on most common ones (including Windows).
+
+As with L</redirector>, there is a L</shell_output_director> options hash
+field as well as an object attribute.
+
+
+=item shell_output_director
+
+The B<shell_output_director> (sometimes called B<sod> for short) is a
+string appended to the internally generated emacs invocation commands to
+control what happens to output.
+
+Most methods here accept a hash reference of options that can include
+their own B<shell_output_director> setting.
+
+Typical values (on a unix-like system) are:
+
+=over
+
+=item  '2>&1'
+
+Intermix STDOUT and STDERR (in elisp: both "message" and "print"
+functions work).  This is the default setting for this object
+attribute.
+
+=item  '2>/dev/null'
+
+return only STDOUT, throwing away STDERR (in elisp: get output
+only from "print"). But see L<File::Spec>'s B<devnull>.
+
+=item  "> $file 2>&1"
+
+send all output to the file $file
+
+=item  ">> $file 2>&1"
+
+append all output to the file $file, preserving any existing
+content.
+
+=item  "2 > $log_file"
+
+return only STDOUT, but save STDERR to $log_file
+
+=back
+
+
 
 =head2 MOTIVATION
 
 Periodically, I find myself interested in the strange world of
 running emacs code from perl.  There's a mildly obscure feature of
 emacs command line invocations called "--batch" that essentially
-transforms emacs into an unusual lisp interpreter: other command-line
+transforms emacs into a lisp interpreter: other command-line
 options allow one to load files of elisp code and run pieces of code
 from the command-line.
 
-You might think that there aren't many uses for this trick,
-but I've found several of them.  You can use it to:
+I've found several uses for this trick. You can use it to:
 
 =over
 
@@ -1671,15 +1938,16 @@ to write perl routines to help drive the process.
 
 =head2 emacs invocation vs Emacs::Run
 
-By default an "emacs --batch" run suppresses most of the usual init
-files (but does load the essentially deprecated "site-start.pl",
-presumably for backwards compatibility).  Emacs::Run has the opposite
-bias: here we try to load all three of the types of init files, if
-they're available, though each one of these can be shut-off
-individually if so desired.  This is because one of the main intended
-uses is to let perl find out about things such as the user's emacs
-settings (notably, the B<load-path>).  And in any case, the performance
-hit of loading these files is no-longer such a big deal.
+By default an "emacs --batch" run suppresses most of the usual
+init files (but does load the essentially deprecated
+"site-start.pl", presumably for backwards compatibility).
+Emacs::Run has the opposite bias: here we try to load all three
+kinds of init files, though each one of these can be shut-off
+individually if so desired.  This is because one of the main
+intended uses is to let perl find out about things such as the
+user's emacs settings (notably, the B<load-path>).  And in any
+case, the performance hit of loading these files is no longer
+such a big deal.
 
 =head1 internal documentation (how the code works, etc).
 
@@ -1719,16 +1987,27 @@ facilitates that process.
 
 =back
 
-=head2 strategies in shelling out
+=head2 Strategies in Shelling Out
 
-Perl has a good feature for running a shell command and capturing the
-output: qx{} (aka back-quotes), and it's easy enough to append "2>&1"
-to a shell command when you'd like to see the STDERR messages
-intermixed with the STDOUT.  This module's methods typically default
-to capturing all output and returning STDOUT and STDERR intermixed;
-though unfortunately there is no good way to distinguishing between
-the messages from STDERR and STDOUT later, and your desired output
-may be lost in a forest of uninteresting notices sent to STDERR.
+Perl, of course, has some good features for running a shell
+command and capturing the output, notably qx{} (aka back-quotes).
+
+It's easy enough to append "2>&1" to a shell command when you'd
+like to see the STDERR messages intermixed with the STDOUT.
+
+This raises fears of portability problems however, which a number of
+module authors have attempted to address in different ways, my own
+being L<IPC::Capture> (which optionally uses L<IPC::Cmd> which in
+turn may use L<IPC::Run> or L<IPC::Open3>).  If L<IPC::Capture>
+is not available, this module will attempt to work by shelling out
+directly (and similarly, L<IPC::Capture> may also shell out directly
+using L<IPC::Cmd> only if needed).
+
+This module's methods typically default to capturing all output
+and returning STDOUT and STDERR intermixed; though unfortunately
+there is no good way to distinguishing between the messages from
+STDERR and STDOUT later, and your desired output may be lost in a
+forest of uninteresting notices sent to STDERR.
 
 From the elisp side, it's important to know that in "--batch" mode,
 the elisp function "message" sends output to STDERR, and you need to use
@@ -1747,7 +2026,11 @@ attribute (plus the addition of a method-specific options to override
 that object-wide suggested default).  This provides the user with
 finer-grained control over how output is handled.
 
-=head2 loaded vs. in load-path
+And as of 0.8 an even simpler method is supplied, the L</redirector>
+code.
+
+
+=head2 Loaded vs. in load-path
 
 The emacs variable "load-path" behaves much like the shell's $PATH
 (or perl's @INC): if you try to load a library called "dired", emacs
@@ -1768,7 +2051,7 @@ So some of the routines here (notably L</elisp_to_load_file>)
 generate elisp with an extra feature that adds the location of the file
 to the load-path as well as just loading it.
 
-=head2 interactive vs. non-interactive elisp init
+=head2 Interactive vs. Non-interactive Elisp Init
 
 Emacs::Run tries to use the user's normal emacs init process even
 though it runs non-interactively.  Unfortunately, it's possible that
@@ -1781,26 +2064,80 @@ sets X fonts for me:
   (unless (eq x-no-window-manager nil)
     (zoom-set-font "-Misc-Fixed-Bold-R-Normal--15-140-75-75-C-90-ISO8859-1"))
 
+=head2 The Tree of Method Calls
+
+The potential tree of method calls now runs fairly deep.  A bug in a
+primitive such as L</detect_site_init> can have wide-ranging effects:
+
+   new
+     init
+        append_to_before_hook
+        process_emacs_libs_addition
+        set_up_ec_lib_loader
+           lib_or_file
+           genec_load_emacs_init
+              append_to_ec_lib_loader
+              detect_site_init
+              detect_lib
+           genec_loader_lib_needed
+              append_to_ec_lib_loader
+           genec_loader_file_needed
+              quote_elisp
+              elisp_to_load_file
+              append_to_ec_lib_loader
+           genec_loader_lib_requested
+              detect_lib
+              append_to_ec_lib_loader
+           genec_loader_file_requested
+              quote_elisp
+              elisp_to_load_file
+              append_to_ec_lib_loader
+        probe_emacs_version
+           parse_emacs_version_string
+
+
+   eval_elisp
+     quote_elisp
+     clean_return_value
+     set_up_ec_lib_loader
+        lib_or_file
+        genec_load_emacs_init
+           append_to_ec_lib_loader
+           find_dot_emacs
+           detect_site_init
+           detect_lib
+        genec_loader_lib_needed
+           append_to_ec_lib_loader
+        genec_loader_file_needed
+           quote_elisp
+           elisp_to_load_file
+           append_to_ec_lib_loader
+        genec_loader_lib_requested
+           detect_lib
+           append_to_ec_lib_loader
+        genec_loader_file_requested
+           quote_elisp
+           elisp_to_load_file
+           append_to_ec_lib_loader
+
+Note that as of this writing (version 0.09) this code ensures that
+the L</ec_lib_loader> string is up-to-date by continually re-generating
+it.
+
 =head1 TODO
 
 =over
 
 =item *
 
-Have "new" fail (return undef) if emacs can not be
-found on the system.  This way you can use the result
-of "new" to determine if you should skip tests, etc.
+Look into cache tricks (Memoize?) to speed things up a little.
+See L</The Tree of Method Calls>.
 
 =item *
 
-Eliminate unixisms, if possible:
-
-  o  A known one: there's a heuristic that spots file paths by looking for "/".
-     (FIXED)
-
-  o  Use File::Spec more, specfically to generate $devnull
-
-  o  Re-write around IPC::Capture.
+Have "new" fail (return undef) if emacs can not be
+found on the system.  This way you can use the result
+of "new" to determine if you should skip tests, etc.
 
 =item *
 
@@ -1867,7 +2204,17 @@ Gnu/linux platform.  Some attempts have been made to make it's
 use portable to other platforms.  At present, using it with a
 non-gnu emacs such as xemacs is not likely to work.
 
+=item *
+
+The L</clean_return_value> routine strips leading and trailing
+newline-quote pairs, but that only covers the case of individual
+elisp print functions.  Evaluating elisp code with multiple
+prints will need something fancier to clean up their behavior.
+
 =back
+
+
+
 
 
 =cut

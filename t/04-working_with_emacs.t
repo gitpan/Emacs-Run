@@ -18,6 +18,19 @@ use lib "$Bin/../lib";
 use lib "$Bin/lib";
 use Emacs::Run::Testorama qw( :all );
 
+# TODO comment out before shipping
+# my $SPOT;
+# BEGIN {
+#   $SPOT = '/home/doom/End/Cave/EmacsPerl/Wall';
+# }
+# use lib ("$SPOT/Emacs-Run-Elisp-Install/lib",
+#          "$SPOT/Emacs-Run-ExtractDocs/lib",
+#          "$SPOT/Emacs-Run-ExtractDocs/t/lib",
+#          "$SPOT/Emacs-Run/lib",
+#          "$SPOT/Emacs-Run/t/dat/usr/lib",
+#          "$SPOT/Emacs-Run/t/lib",
+#          "$SPOT/IPC-Capture/lib");
+
 # Globals
 my $CLASS   = 'Emacs::Run';
 my $SRC_LOC = "$Bin/dat/src";
@@ -341,7 +354,7 @@ ok(1, "Traditional: If we made it this far, we're ok."); #2
 
  SKIP: {
     unless ($ret > 25) {
-      skip "Repeated 'forward-word' counted much less than number of words : weird idea of word chracters?", 1;
+      skip "Repeated 'forward-word' counts way too low: weird idea of word chracters?", 1;
     }
 
     my ($result, $expected) = slurp_files( $result_file, $expected_file );

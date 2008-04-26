@@ -18,7 +18,7 @@ use lib "$Bin/../lib";
 use lib "$Bin/lib";
 
 # Globals
-my $DEBUG = 1;  # TODO set to 0 before ship
+my $DEBUG = 0;  # TODO set to 0 before ship
 my $CHOMPALOT = 1;
 my $CLASS   = 'Emacs::Run';
 my $devnull = File::Spec->devnull;

@@ -1,15 +1,16 @@
 # Test file. Run this like so:
-#   perl 02-alternate_settings_for_shell_output_director.t
+#   perl 06-setting_redirector.t
 # or use 'make test'
 #   doom@kzsu.stanford.edu     2008/03/24 22:15:53
 
 use warnings;
 use strict;
 $|=1;
-my $DEBUG = 0;
+my $DEBUG = 0; # TODO set to 0 before ship
 use Data::Dumper;
 use File::Copy qw( copy );
 use File::Basename qw( fileparse basename dirname );
+use File::Spec;
 use Test::More;
 use Test::Differences;
 
@@ -45,7 +46,7 @@ ok(1, "Traditional: If we made it this far, we're ok."); #2
 
 {#3, #4, #5
   my $method = "get_load_path";
-  my $test_name = "Testing $method, with shell_output_director";
+  my $test_name = "Testing $method, with redirector";
 
   my $mock_home = "$Bin/dat/home/mockingbird";
   my $code_lib = "$USR/lib";
@@ -73,20 +74,21 @@ ok(1, "Traditional: If we made it this far, we're ok."); #2
              "$test_name unset" );
 
   #4
-  $set = '1>/dev/null 2>&1'; # toss all output
+  $set = "stderr_only";
   $er = Emacs::Run->new;
   $load_path_aref = $er->$method({
-                                     shell_output_director => $set
+                                     redirector => $set
                                     });
   print STDERR "\nload_path_aref:\n", Dumper($load_path_aref), "\n" if $DEBUG;
   $expected_load_path_aref = [ ];
+  print STDERR "\nexpected_load_path_aref:\n", Dumper($expected_load_path_aref), "\n" if $DEBUG;
   is_deeply( $load_path_aref, $expected_load_path_aref,
              "$test_name set to $set on method" );
 
   #5
-  $set = '1>/dev/null 2>&1'; # toss all output
+  $set = "stderr_only";
   $er = Emacs::Run->new({
-                         shell_output_director => $set
+                         redirector => $set
                         });
   $load_path_aref = $er->$method();
   print STDERR "\nload_path_aref:\n", Dumper($load_path_aref), "\n" if $DEBUG;
@@ -140,13 +142,13 @@ ok(1, "Traditional: If we made it this far, we're ok."); #2
 
   print STDERR "name_value array of hashrefs: \n" . Dumper(\@name_value) . "\n" if $DEBUG;
 
-  my $sod = '2>&1';
+  my $redirector = 'all_output';
 
   # pairs of options arrays, the first fed into new, the second fed into the method
   my @options_sets = (
                    [ {},                            {} ],
-                   [ {shell_output_director=>$sod}, {} ],
-                   [ {},                            {shell_output_director=>$sod} ],
+                   [ {redirector=>$redirector}, {} ],
+                   [ {},                            {redirector=>$redirector} ],
                   );
 
   for my $i (0..2) {
@@ -212,7 +214,7 @@ ok(1, "Traditional: If we made it this far, we're ok."); #2
   is( $ret, $expected_stderr, "$test_name: captured message sent to stderr.");
 
   $er = Emacs::Run->new({
-                         shell_output_director => '2>/dev/null',
+                         redirector => 'stdout_only',
                         });
 
   $ret = $er->run_elisp_on_file( $filename, $elisp );
@@ -221,7 +223,7 @@ ok(1, "Traditional: If we made it this far, we're ok."); #2
   $er = Emacs::Run->new();
   $ret = $er->run_elisp_on_file( $filename, $elisp,
                                  {
-                                  shell_output_director => '2>/dev/null',
+                                  redirector => 'stdout_only',
                                  } );
 
   is( $ret, '', "$test_name: no messages from stderr (cut off at method).");
@@ -291,7 +293,7 @@ ENDFUNC2
 
   my $args_aref = ["oink", "proper campaign contributions to key races will ensure that business needs can be met"];
 
-  my $opts_href = { shell_output_director => '2>&1',
+  my $opts_href = { redirector => 'all_output',
                   };
 
   my $ret;
