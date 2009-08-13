@@ -9,7 +9,7 @@ Emacs::Run - use emacs from perl via the shell
 
    use Emacs::Run;
    my $er = Emacs::Run->new();
-   my $major_version = $er->emacs_version;
+   my $major_version = $er->emacs_major_version;
    if ($major_version > 22) {
       print "You have a recent version of emacs\n";
    }
@@ -23,8 +23,6 @@ Emacs::Run - use emacs from perl via the shell
    my $email = $er->get_variable(  'user-mail-address' );
    my $name  = $er->eval_function( 'user-full-name'    );
 
-
-
    # suppress the use of the usual emacs init (e.g. ~/.emacs)
    my $er = Emacs::Run->new({
                        load_emacs_init => 0,
@@ -32,27 +30,33 @@ Emacs::Run - use emacs from perl via the shell
    my $result = $er->eval_elisp( '(print (+ 2 2))' );  # that's "4"
 
 
+  # the eval_elisp_full_emacs method works with a full externally spawned emacs
+  # (for code that won't run under '--batch')
+  my $elisp_initialize =
+    qq{
+        (defvar my-temp-var "$text")
+        (insert "This insert will not appear in output.")
+     };
 
-   # Specify in detail how the emacs lisp libraries should be loaded
-   $lib_data = [
-       [ 'dired',                 { type=>'lib',  priority=>'needed'    } ],
-       [ '/tmp/my-load-path.el',  { type=>'file', priority=>'requested' } ],
-       [ '/tmp/my-elisp.el',      { type=>'file', priority=>'needed'    } ],
-     ];
-   my $er = Emacs::Run->new({
-                       lib_data => $lib_data,
-                    });
-   my $result = $er->eval_lisp(
-                  qq{ (print (my-elisp-run-my-code "$perl_string")) }
-                );
+   my $elisp =
+     qq{
+         (insert my-temp-var)
+         (downcase-region (point-min) (point-max))
+         (my-test-lib-do-something)
+        };
 
+  my @emacs_libs = ( $dot_emacs, 'my-test-lib' );
 
-   # Command line usage to view your emacs load_path
-   perl -MEmacs::Run -MData::Dumper -e'my $er=Emacs::Run->new; print Dumper( $er->get_load_path ), "\n"';
+  my $er = Emacs::Run->new({
+                            load_no_inits => 1,
+                            emacs_libs    => \@emacs_libs,
+                           });
 
-
-   ### TODO add example of use of redirector
-
+  my $modified_lines_aref =
+    $er->eval_elisp_full_emacs( {
+         elisp_initialize => $elisp_initialize,
+         output_file      => $name_list_file,    # omit to use temp file
+         elisp            => $elisp,
 
 =head1 DESCRIPTION
 
@@ -62,14 +66,14 @@ emacs when run from perl as an external process.
 The emacs "editor" has some command-line options ("--batch" and so
 on) that turn emacs into a lisp interpreter for the elisp dialect.
 
-This module provides methods to allow perl code to easily use these
-features of emacs for two types of tasks:
+This module provides methods to allow perl code to portably use these
+features of emacs for tasks such as:
 
 =over
 
 =item *
 
-Probe your emacs installation to get the installed version, the
+Probe the system's emacs installation to get the installed version, the
 user's current load-path, and so on.
 
 =item *
@@ -93,20 +97,20 @@ use Data::Dumper;
 use Hash::Util      qw( lock_keys unlock_keys );
 use File::Basename  qw( fileparse basename dirname );
 use File::Spec;
+use Cwd qw( cwd abs_path );
 use List::Util      qw( first );
 use Env             qw( $HOME );
 use List::MoreUtils qw( any );
+use File::Temp      qw{ tempfile };
 
-# switching to a require done during init:
-# use IPC::Capture;
+# IPC::Capture is used dynamically (a require done during init)
 
-our $VERSION = '0.09';
+our $VERSION = '0.10';
 my $DEBUG = 0;
 
 # needed for accessor generation
 our $AUTOLOAD;
 my %ATTRIBUTES = ();
-
 
 =item new
 
@@ -127,7 +131,7 @@ one will be used by setting this attribute.
 
 =item ipc_capture_handle
 
-The L<IPC::Capture> handle, now used by default to run shell commands.
+The L<IPC::Capture> handle, used by default (if available) to run shell commands.
 
 =item redirector
 
@@ -135,7 +139,7 @@ A code that specifies how (by default) to handle the STDOUT and
 STDERR streams from elisp run by methods such as L</eval_elisp>
 and L</run_elisp_on_file>, when L<IPC::Capture> is in use.
 
-As of this writing (version 0.09), this may be one of three values
+As of this writing (version 0.10), this may be one of three values
 (for details on each of these, see L<IPC::Capture>):
 
 =over
@@ -191,8 +195,8 @@ init file).
 
 =item load_no_inits
 
-A convenience flag, used to disable all three types of emacs init
-files in one step when set to a true value.  Overrides the other three.
+A convenience flag, which may be set to disable all three types of emacs init
+files in one step.  Overrides the other three.
 
 =item emacs_libs
 
@@ -355,7 +359,9 @@ sub init {
   # "use_shell_directly"... but don't bother trying this at all if
   # we already know we're doing it that way.
   unless ( $self->{ use_shell_directly } ) {
-    eval "require IPC::Capture";
+    eval {
+      require IPC::Capture
+    };
     if ( not( $@ )) {
       my $ich = IPC::Capture->new();
       $ich->set_filter( $self->{ redirector } );
@@ -410,8 +416,8 @@ sub init {
 
 =head2 Simple Emacs Invocations
 
-Some simple methods for obtaining information from your
-emacs installation.
+Some simple methods for obtaining information from your emacs
+installation.
 
 These methods default to returning STDOUT, suppressing anything
 sent to STDERR.  This behavior can be overridden: see
@@ -658,10 +664,11 @@ output from the elisp code with STDOUT and STDERR
 mixed together, though this behavior can be overridden.
 See L</Controlling Output Redirection>.
 
-(The advanatage of intermixing STDOUT and STDERR is that the
-emacs functions 'message' and 'print' both work to generate
-output. The disadvantage is that you may have inane messages
-from emacs sent to STDERR such as 'Loading library so-and-so'.
+(The advantage of intermixing STDOUT and STDERR is that the
+emacs functions 'message' as well as 'print' both may be used
+for interesting output. The disadvantage is that you may have
+many inane messages from emacs sent to STDERR such as 'Loading
+library so-and-so')
 
 =over
 
@@ -692,7 +699,7 @@ sub eval_elisp {
       $self->redirector_to_sod( $self->redirector );
   my $use_shell_directly = $self->use_shell_directly || $opts->{ shell_output_director };
 
-  $elisp = $self->quote_elisp( $elisp );
+  $elisp = $self->quote_elisp( $self->progn_wrapper( $elisp ));
 
   my $emacs = $self->emacs_path;
   my $before_hook = $self->before_hook;
@@ -745,7 +752,7 @@ sub run_elisp_on_file {
   my $filename = shift;
   my $elisp    = shift;
   my $opts     = shift;
-  my $subname  = ( caller(0) )[3];
+   my $subname  = ( caller(0) )[3];
 
   my $ich = $self->ipc_capture_handle;
 
@@ -784,7 +791,7 @@ sub run_elisp_on_file {
     $retval = $self->clean_return_value( $retval );
 
   } else {
-    my $cmd = "$ec_head $ec_lib_loader $ec_tail $sod";
+    my $cmd = "$ec_head $ec_lib_loader $ec_tail";
     $self->debug("$subname: cmd: $cmd\n");
     $ich->set_filter( $redirector);
     $retval = $ich->run( $cmd );
@@ -800,6 +807,219 @@ sub run_elisp_on_file {
 
   return $retval;
 }
+
+=item eval_elisp_full_emacs
+
+Runs the given chunk(s) of elisp using a temporarily launched
+full scale emacs (not just via --batch mode).
+
+Of necessity, this emacs sub-process must communicate via a file
+(similar to "run_elisp_on_file"), though the output is returned
+from this routine in the form of an array reference of the lines
+of the file.
+
+The main chunk of elisp run by this routine should be designed to
+output to the current buffer (e.g. via "insert" calls).
+
+The output from elisp functions such as "message" and "print" is
+not captured.
+
+As an option, a seperate chunk of initialization elisp may also be
+passed in: it will be run before the output file buffer is
+opened, and hence any modification it makes to the current buffer
+will be ignored.
+
+If the "output_filename" is not supplied, a temporary file will
+be created and deleted afterwards.  If the name is supplied, the
+output file will be still exist afterwards (note: any existing
+contents will be over-written).
+
+The current buffer is saved at the end of the processing (so
+there's no need to include a "save-buffer" call in the elisp).
+
+All arguments are passed into this method via a hashref of
+"options" (though there's one "option" that is required, if you want
+it to do anything: "elisp").  These are:
+
+  elisp_initialize
+  output_file
+  elisp
+
+
+Some example usages:
+
+  my $er = Emacs::Run->new({
+                load_no_inits = 1,
+                emacs_libs => [ '~/lib/my-elisp.el',
+                                '/usr/lib/site-emacs/stuff.el' ],
+
+                });
+
+Using just the required "option":
+
+  my $elisp =
+    q{ (insert-file "$input_file")
+       (downcase-region (point-min) (point-max))
+     };
+
+  my $output =
+    $er->eval_elisp_full_emacs( {
+         elisp => $elisp,
+     }
+   );
+
+Using all options:
+
+  my $output =
+    $er->eval_elisp_full_emacs( {
+         elisp_initialize => $elisp_initialize,
+         output_file      => $output_file,
+         elisp            => $elisp,
+     }
+   );
+
+This method only uses some of the usual Emacs::Run framework. For
+example, since it always does an "exec", many object settings
+have no meaning here: e.g. "use_shell_directly", "redirector",
+"shell_output_director".
+
+If "load_no_inits" is set, the emacs init files will be ignored
+(via "-q") unless, of course, they're passed in manually in
+the "emacs_libs" array reference.  The three individual init settings
+flags have no effect on this method ("load_emacs_init", "load_site_init",
+"load_default_init").
+
+Adding libraries to emacs_libs will not automatically add their
+locations to the load-path (because the "ec_lib_loader" system is
+not in use here).
+
+=cut
+
+sub eval_elisp_full_emacs {
+  my $self     = shift;
+  my $opts     = shift;
+  my $subname  = ( caller(0) )[3];
+
+  my $ich = $self->ipc_capture_handle;
+
+  # unpack options
+#  my $elisp            = $opts->{ elisp };
+  my $elisp_initialize = $self->progn_wrapper( $opts->{ elisp_initialize } );
+  my $elisp            = $self->progn_wrapper( $opts->{ elisp } );
+  my $output_file      = $opts->{ output_file };
+
+  # if $output_file is blank, need to pick a temp file to use.
+  unless( $output_file ) {
+    my $fh;
+    my $unlink = not( $DEBUG );
+    ($fh, $output_file) =
+      tempfile( "emacs_run_eval_elisp_full_emacs-$$-XXXX", SUFFIX => '.txt', UNLINK => $unlink );
+    close ($fh); # need to read this file, not write it (it's written to by the subprocess)
+  }
+
+  # Have to do this to ensure that exit condition works
+  unlink( $output_file ) if -e $output_file;
+
+  my $emacs       = $self->emacs_path;
+  my $before_hook = $self->before_hook;
+
+  # Covering a stupidity with some versions of gnu emacs 21:
+  # need "--no-splash" to suppress an inane splash screen.
+  if ( $self->emacs_major_version eq '21' &&
+       $self->emacs_type eq 'GNU Emacs' &&
+       $self->probe_for_option_no_splash ) {
+    $before_hook .= ' --no-splash ';
+  }
+
+  # Build up the command arguments
+  my @cmd;
+  push @cmd, ( "emacs_from_" . "$$" );  # just the process label, not the binary
+
+  push @cmd, @{ $self->parse_ec_string( $before_hook ) } if $before_hook;
+
+  foreach my $lib ( @{ $self->emacs_libs } ) {
+    push @cmd, ( "-l", "$lib" ) if $lib;
+  }
+
+  push @cmd, ( "--eval", "$elisp_initialize" ) if $elisp_initialize;
+  push @cmd, ( "--file", "$output_file" );
+  push @cmd, ( "--eval", "$elisp" );
+  push @cmd, ( "-f", "save-buffer" );
+    # and if $output_file isn't current after running $elisp, it's not my problem.
+
+  $self->debug("$subname: cmd: " . Dumper( \@cmd ) . "\n");
+
+  if ( my $pid = fork ) {
+    # this is parent code
+    ($DEBUG) && print STDERR "I'm the parent, the child pid is $pid\n";
+
+    #  kill the child emacs when it's finished
+    LOOP: while(1) { # TODO loop needs to time out (what if *nothing* is written?)
+      if ( $self->full_emacs_done ({ output_file => $output_file, pid => $pid }) ){
+        sleep 1; # a little time for things to settle down (paranoia)
+        my $status =
+          kill 1, $pid;
+        ($DEBUG) && print STDERR "Tried to kill (1) pid $pid, status: $status \n";
+        last LOOP;
+      }
+    }
+ } else {
+    # this is child code
+    die "cannot fork: $!" unless defined $pid;
+
+    ($DEBUG) && print STDERR "This is the child, about to exec:\n";
+    exec { $emacs } @cmd;
+  }
+
+  open my $fh, '<', $output_file or die "$!";
+  my @result = map{ chomp($_); s{\r$}{}xms; $_ } <$fh>;
+      # Note: stripping CRs is a hack to deal with some windows-oriented .emacs
+  return \@result;
+}
+
+
+=item full_emacs_done
+
+Internally used routine.
+
+When it looks as though the child process run by
+eval_elisp_full_emacs is finished, this returns true.
+
+At present, this just watches to see when the output_file
+has been written.
+
+=cut
+
+### TODO - better to watch pid, determine when it's idle?
+sub full_emacs_done {
+  my $self = shift;
+  my $opts = shift;
+
+  my $pid         = $opts->{ pid };
+  my $output_file = $opts->{ output_file };
+
+  my $cutoff = 0;      # increase, if this seems flaky
+  if ( (-e $output_file) && ( (-s $output_file) > $cutoff ) ) {
+    return 1;
+  } else {
+    return 0;
+  }
+}
+
+
+
+
+# Alternate way of doing it, returning scalar string ref
+#   # open file, slurp, return scalar ref of contents
+#   my $contents;
+#   { undef $/;
+#     open my $fh, '<', $output_file or die "$!";
+#     $contents = <$fh>;
+#   }
+#   return \$contents;
+
+
+
 
 
 =back
@@ -837,6 +1057,113 @@ sub quote_elisp {
   $elisp =~ s{"}{\\"}xmsg; # add one backwhack to the double-quotes
   return $elisp;
 }
+
+
+=item progn_wrapper
+
+Takes a chunk of elisp, and adds a "progn" around it, to help
+make multi-line chunks of elisp Just Work.
+
+=cut
+
+sub progn_wrapper {
+  my $self = shift;
+  my $elisp = shift;
+
+  $elisp = "(progn $elisp )" if $elisp;
+  return $elisp;
+}
+
+=item parse_ec_string
+
+Takes a chunk of emacs command-line invocation in string form
+and converts it to a list form (suitable for feeding into "system"
+or "exec", stepping around the shell).
+
+Returns an aref of tokens (filenames, options, option-arguments).
+
+Limitation:
+
+The '--' option (which indicates that all following tokens are
+file names, even if they begin with a hyphen) is not yet handled
+correctly here.
+
+=cut
+
+# processing one char at a time
+#   different tokens have different syntax - when we know we're
+#   doing one type, we'll watch for it's ending
+
+#   quoted strings are treated as an additional token-type
+#   filenames are handled as option-arguments
+
+#   remember when you see quotes (toggle state)
+#   when you see an unquoted leading [-+], that begins an option
+#      [\s=] closes the option
+#        = means the following is an option-arg
+#        otherwise, it's an option-arg or a file if no leading [-+]
+
+sub parse_ec_string {
+  my $self = shift;
+
+  my $ec_string = shift;
+  my (@ec, $part);
+
+  # drop leading and trailing whitespace
+  chomp($ec_string);
+  $ec_string =~ s/^\s//;
+  $ec_string =~ s/\s$//;
+
+  # state flags
+  my $quoted = 0;
+  my $opted  = 1; # begin saving whatever is there at the outset
+  my $arged = 0;
+  # 1-char of memory
+  my $prev   = '';
+
+  my @chars = split '', $ec_string;
+  foreach (@chars) {
+    if ( /\s/ and $prev =~ /\s/ ) { # turn multiple spaces into one
+      next;
+    }
+    if ( not( $quoted) and /"/ ) {
+      $quoted = 1;
+    } elsif( ($quoted) and /"/ and $prev ne '\\') { # matches: " but not \"
+      $quoted = 0;
+      push @ec, $part; $part = '';
+    } elsif ($quoted) {
+      # fold double backwhacks into one
+      if( $_ eq '\\' and $prev eq '\\' ){
+        chop( $part );
+      }
+      # drop escapes from escaped quotes
+      if( $_ eq '"' and $prev eq '\\' ) {
+        chop( $part );
+      }
+      $part .= $_;
+    } elsif( not( $opted ) and /[-+]/ and $prev ne '\\' ) {
+      $arged = 1;
+      $part .= $_;
+    } elsif ( $opted and /[\s=]/ ) {
+      $opted = 0;
+      push @ec, $part; $part = '';
+    } elsif ($opted) {
+      $part .= $_;
+    } elsif( not( $arged ) and ( $prev =~ /\s/ or ($prev eq '=') )) { # looks back ar prev char
+      $arged = 1;
+      $part .= $_;  # must save-up this char (transition char was the previous one)
+    } elsif ($arged and /\s/ ) {
+      $arged = 0;
+      push @ec, $part; $part = '';
+    } elsif ($arged) {
+      $part .= $_;
+    }
+    $prev = $_;
+  }
+  push @ec, $part unless( $part =~ /^\s*$/ );  # skipping blank lines (hack hack)
+  return \@ec;
+}
+
 
 =item clean_return_value
 
@@ -880,7 +1207,7 @@ sub redirector_to_sod {
   if( $redirector eq 'stdout_only' ) {
     $sod = "2>$devnull";
   } elsif ( $redirector eq 'stderr_only' ) {
-    $sod = "1>$devnull 2>&1";  # TODO check
+    $sod = "2>&1 1>$devnull";
   } elsif ( $redirector eq 'all_output' ) {
     $sod = '2>&1';
   }
@@ -922,7 +1249,8 @@ sub process_emacs_libs_addition {
 
   my $lib_data = $self->lib_data;
   push @{ $lib_data }, @new_lib_data;
-  $self->set_lib_data( $lib_data );  # called for side-effects: set_up_ec_lib_loader
+  $self->set_lib_data( $lib_data );  # called for side-effects:
+                                     #    set_up_ec_lib_loader
   return \@new_lib_data;
 }
 
@@ -954,7 +1282,8 @@ sub process_emacs_libs_reset {
 
   my $lib_data = $self->lib_data;
   push @{ $lib_data }, @new_lib_data;
-  $self->set_lib_data( $lib_data );  # called for side-effects: set_up_ec_lib_loader
+  $self->set_lib_data( $lib_data );  # called for side-effects:
+                                     #   set_up_ec_lib_loader
   return \@new_lib_data;
 }
 
@@ -987,6 +1316,14 @@ sub set_up_ec_lib_loader {
     unless ( $type ) {
       $type = $self->lib_or_file( $name );
       $rec->[1]->{type} = $type;
+
+#       # experimental code -- Wed Apr  1 11:46:48 2009
+#       # needed to fix handling of relative paths (with "..")?
+#       if ($type eq 'file') {
+#         $name = abs_path( $name ); # returns undef if not -e
+#         $rec->[0] = $name;
+#       }
+
     }
     unless ( $priority ) {
       $priority = $self->default_priority;
@@ -1216,7 +1553,6 @@ sub probe_emacs_version {
     my $cmd = "$emacs --version $sod";
     $retval = qx{ $cmd };
   } else {
-
     my $cmd = "$emacs --version";
 
     $ich->set_filter( $redirector );
@@ -1629,11 +1965,11 @@ sub append_to_ec_lib_loader {
 Non-standard setter that appends the given string to the
 the L</before_hook> attribute.
 
-Under some circumstances, this module uses the L</before_hook>
-for internal purposes (for -Q and --no-splash), so using an
-ordinary setter could be mildly dangerous (you might erase
-something you didn't realize was there).  Typically it's better
-to just append to the L</before_hook> by using this method.
+Under some circumstances, this module uses the L</before_hook> for
+internal purposes (for -Q and --no-splash), so using an ordinary
+setter might erase something you didn't realize was there.
+Typically it's safer to do an append to the L</before_hook> by
+using this method.
 
 =cut
 
@@ -1753,7 +2089,9 @@ sub set_use_shell_directly {
   $self->{ use_shell_directly } = $use_shell_directly;
 
   unless ( $self->{ use_shell_directly } ) {
-    eval "require IPC::Capture";
+    eval {
+      require IPC::Capture;
+    };
     if ( not( $@ )) {
       my $ich = IPC::Capture->new();
       $ich->set_filter( $self->{ redirector } );
@@ -2130,6 +2468,11 @@ it.
 
 =item *
 
+Rather than use elisp's "print", should probably use "prin1" (does what
+you mean without need for a clean-up routine).
+
+=item *
+
 Look into cache tricks (Memoize?) to speed things up a little.
 See L</The Tree of Method Calls>.
 
@@ -2158,33 +2501,38 @@ L<http://obsidianrook.com/devnotes/talks/test_everything/bin/1-test_emacs_regexp
 In L</run_elisp_on_file>, add support for skipping to a line number
 after opening a file
 
+=item *
+
+I think this feature of emacs invocation could be used to simplify
+things a little (I'm manipulating load-path directly at present):
+
+   `-L DIR'
+   `--directory=DIR'
+       Add directory DIR to the variable `load-path'.
+
+=item *
+
+loop in eval_elisp_full_emacs needs to time-out (e.g. if no output is written)
+
+=item *
+
+Something like eval_elisp_full_emacs should be able to do image
+capture of the external emacs process. (Allows automated tests of
+syntax coloring, etc.)
+
+=item *
+
+Write more tests of redirectors -- found and fixed (?) bug in stderr_only.
+
+=item *
+
+"make test" is currently showing some annoying subroutine redefined warnings
+on IPC::Open3 (these don't occur when tests are run individually).
+Presumably this is related to my funky lashup:
+  IPC::Capture => IPC::Cmd ==> IPC::Run and/or IPC::Open3
+Fix/remove the lashup?  Try switching to Module::Build?
+
 =back
-
-=head1 SEE ALSO
-
-L<Emacs::Run::ExtractDocs>
-
-Emacs Documentation: Command Line Arguments for Emacs Invocation
-L<http://www.gnu.org/software/emacs/manual/html_node/emacs/Emacs-Invocation.html>
-
-A lightning talk about (among other things) using perl to test
-emacs code: "Using perl to test non-perl code":
-
-L<http://obsidianrook.com/devnotes/talks/test_everything/index.html>
-
-
-=head1 AUTHOR
-
-Joseph Brenner, E<lt>doom@kzsu.stanford.eduE<gt>,
-07 Mar 2008
-
-=head1 COPYRIGHT AND LICENSE
-
-Copyright (C) 2008 by Joseph Brenner
-
-This library is free software; you can redistribute it and/or modify
-it under the same terms as Perl itself, either Perl version 5.8.2 or,
-at your option, any later version of Perl 5 you may have available.
 
 =head1 BUGS & LIMITATIONS
 
@@ -2211,10 +2559,82 @@ newline-quote pairs, but that only covers the case of individual
 elisp print functions.  Evaluating elisp code with multiple
 prints will need something fancier to clean up their behavior.
 
+=item *
+
+L</genec_load_emacs_init> runs into trouble if there's a bug in the .emacs
+file, because it proceeds when it can find the file via
+L</find_dot_emacs>, but doesn't verify it will load cleanly:
+it charges ahead and tries to use it while doing a L</detect_lib>,
+which gets confused because it looks for a very specific message
+to indicate failure, and doesn't understand any error messages from
+an earlier stage.  It would probably be better for L</find_dot_emacs>
+to also vet the file, and error out if it doesn't succeed.
+
 =back
 
+=head1 SEE ALSO
+
+L<Emacs::Run::ExtractDocs>
+
+Emacs Documentation: Command Line Arguments for Emacs Invocation
+L<http://www.gnu.org/software/emacs/manual/html_node/emacs/Emacs-Invocation.html>
+
+A lightning talk about (among other things) using perl to test
+emacs code: "Using perl to test non-perl code":
+
+L<http://obsidianrook.com/devnotes/talks/test_everything/index.html>
+
+=head1 OTHER EXAMPLES
+
+Examples of "advanced" features (i.e. ones you're unlikely to want to use):
+
+   # Specify in detail how the emacs lisp libraries should be loaded
+   # (initialization does not fail if a library that's merely "requested"
+   # is unavailable):
+   $lib_data = [
+       [ 'dired',                 { type=>'lib',  priority=>'needed'    } ],
+       [ '/tmp/my-load-path.el',  { type=>'file', priority=>'requested' } ],
+       [ '/tmp/my-elisp.el',      { type=>'file', priority=>'needed'    } ],
+     ];
+   my $er = Emacs::Run->new({
+                       lib_data => $lib_data,
+                    });
+   my $result = $er->eval_lisp(
+                  qq{ (print (my-elisp-run-my-code "$perl_string")) }
+                );
 
 
+
+   # using a "redirector" code (capture only stderr, ignore stdout, like '1>/dev/null')
+   $er = Emacs::Run->new({
+                         redirector => 'stderr_only'
+                        });
+   my $result = $er->eval_elisp( '(message "hello world") (print "you can't see me"))' );
+
+
+
+   # View your emacs load_path from the command-line
+   perl -MEmacs::Run -le'my $er=Emacs::Run->new; print for @{ $er->get_load_path }';
+
+   # Note that the obvious direct emacs invocation will not show .emacs customizations:
+   emacs --batch --eval "(print (mapconcat 'identity load-path \"\n\"))"
+
+   # This does though
+   emacs --batch -l ~/.emacs --eval "(prin1 (mapconcat 'identity load-path \"\n\"))" 2>/dev/null
+
+
+=head1 AUTHOR
+
+Joseph Brenner, E<lt>doom@kzsu.stanford.eduE<gt>,
+07 Mar 2008
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (C) 2008 by Joseph Brenner
+
+This library is free software; you can redistribute it and/or modify
+it under the same terms as Perl itself, either Perl version 5.8.2 or,
+at your option, any later version of Perl 5 you may have available.
 
 
 =cut

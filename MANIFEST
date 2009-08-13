@@ -6,6 +6,7 @@ t/00-parse_emacs_version_strings.t
 t/02-distinguish_lib_or_file.t
 t/04-working_with_emacs.t
 t/06-setting_redirector.t
+t/08-setting_shell_output_director.t
 lib/Emacs/Run.pm
 t/lib/Emacs/Run/Testorama.pm
 t/dat/tmp/html/defvarsity_el.html
@@ -35,5 +36,4 @@ t/dat/usr/lib-target/shadowed.el
 t/dat/usr/lib-alpha/null.el
 t/dat/usr/lib-alpha/payload.el
 t/dat/READTHIS
-
 META.yml                                 Module meta-data (added by MakeMaker)

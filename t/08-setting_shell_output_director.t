@@ -1,12 +1,12 @@
 # Test file. Run this like so:
-#   perl 06-setting_redirector.t
+#   perl 22-setting_shell_output_director.t
 # or use 'make test'
 #   doom@kzsu.stanford.edu     2008/03/24 22:15:53
 
 use warnings;
 use strict;
 $|=1;
-my $DEBUG = 0; # TODO set to 0 before ship
+my $DEBUG = 0;
 use Data::Dumper;
 use File::Copy qw( copy );
 use File::Basename qw( fileparse basename dirname );
@@ -18,6 +18,19 @@ use FindBin qw( $Bin );
 use lib "$Bin/../lib";
 use lib "$Bin/lib";
 use Emacs::Run::Testorama qw( :all );
+
+# comment out before shipping
+# my $SPOT;
+# BEGIN {
+#   $SPOT = '/home/doom/End/Cave/EmacsPerl/Wall';
+# }
+# use lib ("$SPOT/Emacs-Run-Elisp-Install/lib",
+#          "$SPOT/Emacs-Run-ExtractDocs/lib",
+#          "$SPOT/Emacs-Run-ExtractDocs/t/lib",
+#          "$SPOT/Emacs-Run/lib",
+#          "$SPOT/Emacs-Run/t/dat/usr/lib",
+#          "$SPOT/Emacs-Run/t/lib",
+#          "$SPOT/IPC-Capture/lib");
 
 # Globals
 my $CLASS   = 'Emacs::Run';
@@ -40,19 +53,13 @@ if( not( $emacs_found ) ) {
   plan tests => 23;
 }
 
-if ($DEBUG) {
-  print STDERR "$0 using emacs version:\n$emacs_found\n";
-  print "$0 using emacs version:\n$emacs_found\n";
-}
-
-
 use_ok( $CLASS );
 
 ok(1, "Traditional: If we made it this far, we're ok."); #2
 
 {#3, #4, #5
   my $method = "get_load_path";
-  my $test_name = "Testing $method, with redirector";
+  my $test_name = "Testing $method, with shell_output_director";
 
   my $mock_home = "$Bin/dat/home/mockingbird";
   my $code_lib = "$USR/lib";
@@ -80,21 +87,20 @@ ok(1, "Traditional: If we made it this far, we're ok."); #2
              "$test_name unset" );
 
   #4
-  $set = "stderr_only";
+  $set = "1>$devnull 2>&1"; # toss all output
   $er = Emacs::Run->new;
   $load_path_aref = $er->$method({
-                                     redirector => $set
+                                     shell_output_director => $set
                                     });
   print STDERR "\nload_path_aref:\n", Dumper($load_path_aref), "\n" if $DEBUG;
   $expected_load_path_aref = [ ];
-  print STDERR "\nexpected_load_path_aref:\n", Dumper($expected_load_path_aref), "\n" if $DEBUG;
   is_deeply( $load_path_aref, $expected_load_path_aref,
              "$test_name set to $set on method" );
 
   #5
-  $set = "stderr_only";
+  $set = "1>$devnull 2>&1"; # toss all output
   $er = Emacs::Run->new({
-                         redirector => $set
+                         shell_output_director => $set
                         });
   $load_path_aref = $er->$method();
   print STDERR "\nload_path_aref:\n", Dumper($load_path_aref), "\n" if $DEBUG;
@@ -148,13 +154,13 @@ ok(1, "Traditional: If we made it this far, we're ok."); #2
 
   print STDERR "name_value array of hashrefs: \n" . Dumper(\@name_value) . "\n" if $DEBUG;
 
-  my $redirector = 'all_output';
+  my $sod = '2>&1';
 
   # pairs of options arrays, the first fed into new, the second fed into the method
   my @options_sets = (
                    [ {},                            {} ],
-                   [ {redirector=>$redirector}, {} ],
-                   [ {},                            {redirector=>$redirector} ],
+                   [ {shell_output_director=>$sod}, {} ],
+                   [ {},                            {shell_output_director=>$sod} ],
                   );
 
   for my $i (0..2) {
@@ -172,7 +178,7 @@ ok(1, "Traditional: If we made it this far, we're ok."); #2
   }
 }
 
-{
+{ #12...
   my $test_name = "Testing run_elisp_on_file";
 
   my $mock_home     = "$Bin/dat/home/penguindust";
@@ -214,15 +220,14 @@ ok(1, "Traditional: If we made it this far, we're ok."); #2
   # But that's not what we really care about just now... the return value is the thing:
   print STDERR "ret: $ret\n" if $DEBUG;
 
-  my $expected_stderr_pat =
-    qr{ \QYow! I am spewing to STDERR!  Can I register as an Anarchist?\E .*? \Q$result_file\E }xms;
-  # The message used to be "Wrote", now it's "Saving file"  -- Sun Mar 29 17:17:44 2009
+  my $mess = 'Yow! I am spewing to STDERR!  Can I register as an Anarchist?';
+  $mess =~ s{ \s+ }{ \\s+ }xmsg;
+  my $expected_pat = qr{ ^ $mess }xms;
 
-  like( $ret, qr{ $expected_stderr_pat }xms,
-        "$test_name: captured message sent to stderr.");
+  like( $ret, $expected_pat, "$test_name: captured message sent to stderr.");
 
   $er = Emacs::Run->new({
-                         redirector => 'stdout_only',
+                         shell_output_director => "2>$devnull",
                         });
 
   $ret = $er->run_elisp_on_file( $filename, $elisp );
@@ -231,7 +236,7 @@ ok(1, "Traditional: If we made it this far, we're ok."); #2
   $er = Emacs::Run->new();
   $ret = $er->run_elisp_on_file( $filename, $elisp,
                                  {
-                                  redirector => 'stdout_only',
+                                  shell_output_director => "2>$devnull",
                                  } );
 
   is( $ret, '', "$test_name: no messages from stderr (cut off at method).");
@@ -301,7 +306,7 @@ ENDFUNC2
 
   my $args_aref = ["oink", "proper campaign contributions to key races will ensure that business needs can be met"];
 
-  my $opts_href = { redirector => 'all_output',
+  my $opts_href = { shell_output_director => '2>&1',
                   };
 
   my $ret;

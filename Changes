@@ -44,7 +44,12 @@ Revision history for Perl extension Emacs::Run.
       - Using File::Spec in lib_or_file rather than matching for '/'
       - Using File::Spec->devnull now in tests.
 
-0.08  Saturday April 26, 2008   2:02 AM
+0.09  Saturday April 26, 2008   2:02 AM
       - Now (optionally) uses IPC::Capture in preference to
         shelling out directly via qx.
 
+0.10  Wednesday August 12, 2009   7:37 PM
+      - Added a method to use when the elisp code being run
+        will not work right under "batch": eval_elisp_full_emacs
+      - Added internally used utilities (hacks?) such as parse_ec_string,
+        progn_wrapper

@@ -10,6 +10,10 @@ To install this module type the following:
    make test
    make install
 
+"make test" may generate some ignorable warnings of the form:
+  "Subroutine ... redefined ... IPC/Open3.pm"
+
+
 DEPENDENCIES
 
 This module depends on having GNU/Emacs installed on the system
@@ -17,11 +21,17 @@ This module depends on having GNU/Emacs installed on the system
 
 This module requires these other modules and libraries:
    Class::Base
+   List::MoreUtils
+   File::Temp
 
 The tests require:
    Test::Differences
    Test::More
 
+If this is present, the module may use it under some circumstances:
+   IPC::Capture
+
+(This in turn uses IPC::Cmd, which in turn may use IPC::Open3 or IPC::Run).
 
 COPYRIGHT AND LICENCE
 
