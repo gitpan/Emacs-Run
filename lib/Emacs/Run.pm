@@ -105,7 +105,7 @@ use File::Temp      qw{ tempfile };
 
 # IPC::Capture is used dynamically (a require done during init)
 
-our $VERSION = '0.10';
+our $VERSION = '0.11';
 my $DEBUG = 0;
 
 # needed for accessor generation
@@ -201,8 +201,8 @@ files in one step.  Overrides the other three.
 =item emacs_libs
 
 A list of emacs libraries (with or without paths) to be loaded
-automatically.  This is provided as a convenience for quick use.
-To take full control over how your emacs libraries are handled,
+automatically.  This is recommended for most uses, though
+to take full control over how your emacs libraries are handled,
 see L</lib_data>.
 
 =item default_priority
@@ -821,8 +821,8 @@ of the file.
 The main chunk of elisp run by this routine should be designed to
 output to the current buffer (e.g. via "insert" calls).
 
-The output from elisp functions such as "message" and "print" is
-not captured.
+The output is not captured from elisp functions such as "message"
+and "print".
 
 As an option, a seperate chunk of initialization elisp may also be
 passed in: it will be run before the output file buffer is
@@ -1699,6 +1699,13 @@ Returns the library name ('site-start') if found, undef if not.
 
 =cut
 
+# runs an emacs batch process as a probe, and if the command
+# runs "successfully", it checks the return value, and parses
+# it to see if the library was in fact found.
+
+# Note that this routine can not easily be written to use
+# detect_lib below, because of the different handling of .emacs
+
 sub detect_site_init {
   my $self = shift;
   my $opts = shift;
@@ -1729,7 +1736,6 @@ sub detect_site_init {
       $self->debug("$subname: ipc capture call failed on: $cmd");
       return;
     }
-
   }
 
   $self->debug("$subname retval:\n $retval\n");

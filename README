@@ -1,4 +1,4 @@
-Emacs-Run version 0.08
+Emacs-Run version 0.11
 ======================
 
 INSTALLATION
@@ -28,9 +28,8 @@ The tests require:
    Test::Differences
    Test::More
 
-If this is present, the module may use it under some circumstances:
+If this module is present, this code may use it under some circumstances:
    IPC::Capture
-
 (This in turn uses IPC::Cmd, which in turn may use IPC::Open3 or IPC::Run).
 
 COPYRIGHT AND LICENCE

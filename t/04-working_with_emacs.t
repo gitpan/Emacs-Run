@@ -116,7 +116,18 @@ ok(1, "Traditional: If we made it this far, we're ok."); #2
   $ENV{HOME} = $mock_home;
   echo_home() if $DEBUG;
 
-  my $er = Emacs::Run->new;  # Note, this calls genec_load_emacs_init indirectly
+  # Note, internally, "new" calls genec_load_emacs_init indirectly
+  # (so this test is not misnamed).
+
+  # Also: The detect_site_init routine finds the *system's*
+  # site-start.el, if it exists, i.e. it can't be constrained to
+  # search just the mock home location. For a portable test, we
+  # must shut off the search manually, flipping "load_site_init"
+  # off.
+  my $er = Emacs::Run->new({
+                            load_site_init => 0,
+                           });
+
   my $ec_frag = $er->ec_lib_loader;
 
   my $expected =

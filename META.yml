@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:                Emacs-Run
-version:             0.10
+version:             0.11
 abstract:            use emacs from perl via the shell
 license:             ~
 author:              

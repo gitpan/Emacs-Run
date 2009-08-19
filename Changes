@@ -53,3 +53,7 @@ Revision history for Perl extension Emacs::Run.
         will not work right under "batch": eval_elisp_full_emacs
       - Added internally used utilities (hacks?) such as parse_ec_string,
         progn_wrapper
+
+0.11  Wednesday August 19, 2009   2:22 PM
+      - Improved portability of a test by instructing it to avoid
+        searching for a site-start.el file.
