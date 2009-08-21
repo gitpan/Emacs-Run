@@ -191,6 +191,13 @@ sub slurp_files {
   return ($result, $expected);
 }
 
+=item get_short_label_from_name
+
+If a given name is long (i.e. has many hyphens),
+will create a short version of it (arbitrarily
+taking the fourth element).
+
+=cut
 
 sub  get_short_label_from_name {
   my $varname = shift;
@@ -207,6 +214,8 @@ sub  get_short_label_from_name {
 
 
 1;
+
+=back
 
 =head1 SEE ALSO
 

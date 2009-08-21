@@ -1,9 +1,14 @@
+Build.PL
 Changes
-Makefile.PL
 MANIFEST
 README
-t/00-parse_emacs_version_strings.t
-t/02-distinguish_lib_or_file.t
+lib/Emacs/Run.pm
+t/00-load.t
+t/pod-coverage.t
+t/pod.t
+t/01-basic_object_creation.t
+t/02-parse_emacs_version_strings.t
+t/03-distinguish_lib_or_file.t
 t/04-working_with_emacs.t
 t/06-setting_redirector.t
 t/08-setting_shell_output_director.t
@@ -36,4 +41,6 @@ t/dat/usr/lib-target/shadowed.el
 t/dat/usr/lib-alpha/null.el
 t/dat/usr/lib-alpha/payload.el
 t/dat/READTHIS
-META.yml                                 Module meta-data (added by MakeMaker)
+
+Makefile.PL
+META.yml

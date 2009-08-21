@@ -105,7 +105,7 @@ use File::Temp      qw{ tempfile };
 
 # IPC::Capture is used dynamically (a require done during init)
 
-our $VERSION = '0.11';
+our $VERSION = '0.12';
 my $DEBUG = 0;
 
 # needed for accessor generation
@@ -265,10 +265,6 @@ lib is a file if it looks that way (i.e it has a path and/or extension).
 If both B<lib_data> and B<emacs_libs> are used, the B<lib_data> libraries
 are loaded first, followed by the B<emacs_libs> libraries.
 
-=over
-
-=back
-
 These attributes are used to pass information to the client programmer,
 they should be regarded as read-only:
 
@@ -289,6 +285,8 @@ the "probe_emacs_version" method during object initialization.
 There are also a number of object attributes intended largely for
 internal use.  The client programmer has access to these, but
 is not expected to need it.  These are documented in L</internal attributes>.
+
+=back
 
 =cut
 
@@ -411,6 +409,8 @@ sub init {
   lock_keys( %{ $self } );
   return $self;
 }
+
+
 
 =back
 
@@ -1340,7 +1340,9 @@ sub set_up_ec_lib_loader {
   return $ec_lib_loader;
 }
 
-=item Generation of Emacs Command Strings to Load Libraries
+=back
+
+=head2 Generation of Emacs Command Strings to Load Libraries
 
 These are routines run by L</set_up_ec_lib_loader> that generate a
 string that can be included in an emacs command line invocation to
@@ -1398,9 +1400,10 @@ sub genec_load_emacs_init {
 =item Genec Methods Called Dynamically
 
 The following is a set of four routines used by
-L</set_ec_lib_loader> to generate a string that can be included in
-an emacs command line invocation to load the given library.
-The methods here are named according to the pattern:
+"set_ec_lib_loader" (( TODO check that name )) to generate a
+string that can be included in an emacs command line invocation
+to load the given library.  The methods here are named according
+to the pattern:
 
   "genec_loader_$type_$priority"
 
@@ -1897,7 +1900,7 @@ sub elisp_file_from_library_name_if_in_loadpath {
 
 Generates elisp code that will instruct emacs to load the given
 library.  It also makes sure it's location is in the load-path, which
-is not precisely the same thing: See L</loaded vs. in load-path>.
+is not precisely the same thing: See "Loaded vs. in load-path".
 
 Takes one argument, which can either be the name of the library, or
 the name of the file, as distinguished by the presence of a ".el"
@@ -2079,8 +2082,6 @@ sub push_emacs_libs {
   return $emacs_libs;
 }
 
-=back
-
 =item set_use_shell_directly
 
 Setter for object attribute L</set_use_shell_directly>.
@@ -2213,6 +2214,7 @@ on most common ones (including Windows).
 As with L</redirector>, there is a L</shell_output_director> options hash
 field as well as an object attribute.
 
+=over
 
 =item shell_output_director
 
@@ -2253,7 +2255,7 @@ return only STDOUT, but save STDERR to $log_file
 
 =back
 
-
+=back
 
 =head2 MOTIVATION
 
