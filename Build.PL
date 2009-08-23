@@ -10,7 +10,6 @@ my $builder = Module::Build->new(
     build_requires      => {
                                  'Test::More'          => 0,
                                  'Class::Base'         => 0.03,
-                                 'IPC::Capture'        => 0,
                                  'Data::Dumper'        => 0,
                                  'File::Spec'          => 0,
                                  'File::Basename'      => 0,
@@ -28,5 +27,8 @@ my $builder = Module::Build->new(
     add_to_cleanup      => [ 'Emacs-Run-*' ],
     create_makefile_pl => 'traditional',
 );
+
+# No longer in use:
+###                                 'IPC::Capture'        => 0,
 
 $builder->create_build_script();

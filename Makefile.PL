@@ -12,7 +12,6 @@ WriteMakefile
                            'File::Spec' => 0,
                            'File::Temp' => 0,
                            'Hash::Util' => 0,
-                           'IPC::Capture' => 0,
                            'List::MoreUtils' => 0,
                            'List::Util' => 0,
                            'Test::Differences' => 0,

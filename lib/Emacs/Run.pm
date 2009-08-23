@@ -30,8 +30,8 @@ Emacs::Run - use emacs from perl via the shell
    my $result = $er->eval_elisp( '(print (+ 2 2))' );  # that's "4"
 
 
-  # the eval_elisp_full_emacs method works with a full externally spawned emacs
-  # (for code that won't run under '--batch')
+  # the eval_elisp_full_emacs method works with a full externally
+  # spawned emacs (for code that won't run under '--batch')
   my $elisp_initialize =
     qq{
         (defvar my-temp-var "$text")
@@ -103,9 +103,10 @@ use Env             qw( $HOME );
 use List::MoreUtils qw( any );
 use File::Temp      qw{ tempfile };
 
+### Note: phasing out IPC::Capture entirely -- Sat Aug 22 02:17:04 2009
 # IPC::Capture is used dynamically (a require done during init)
 
-our $VERSION = '0.12';
+our $VERSION = '0.13';
 my $DEBUG = 0;
 
 # needed for accessor generation
@@ -129,18 +130,14 @@ the program if it can. If you have multiple emacsen installed in
 different places and/or under different names, you can choose which
 one will be used by setting this attribute.
 
-=item ipc_capture_handle
-
-The L<IPC::Capture> handle, used by default (if available) to run shell commands.
-
 =item redirector
 
-A code that specifies how (by default) to handle the STDOUT and
-STDERR streams from elisp run by methods such as L</eval_elisp>
-and L</run_elisp_on_file>, when L<IPC::Capture> is in use.
+A code that specifies how (by default) to handle the standard
+output and error streams from elisp run by methods such as
+L</eval_elisp> and L</run_elisp_on_file>, when L<IPC::Capture> is
+in use.
 
-As of this writing (version 0.10), this may be one of three values
-(for details on each of these, see L<IPC::Capture>):
+This may be one of three values:
 
 =over
 
@@ -152,22 +149,13 @@ As of this writing (version 0.10), this may be one of three values
 
 =back
 
-Note that the somewhat unusual B<all_separated> redirector setting
-is not supported by this module.
-
-=item use_shell_directly
-
-Flag to indicate you always want to shell out directly rather than
-use L<IPC::Capture>.
+Alternately, one may enter Bourne shell redirection codes using
+the L</shell_output_director>.
 
 =item shell_output_director
 
-The analog of the L</redirector> for when using the shell directly:
-a Bourne shell redirection code (ala '2>&1').
-
-Setting this also causes L</use_shell_directly> to be set.
-
-See L</Controlling Output Redirection>.
+A Bourne shell redirection code (e.g. '2>&1'), and alternative to
+setting L</redirector>.
 
 =item before_hook
 
@@ -211,12 +199,15 @@ The global default for how all the emacs libraries should be loaded.
 Normally this is set to "requested", but it can be set to "needed".
 
 A 'requested' library will be silently skipped if it is not available
-(and any elisp code using it may need to do something like 'featurep'
-checks to adapt to it's absence).  A 'needed' file will cause an error
-to occur if it is not available.  Note: this error does not occur
-during object instantiation, but only after a method is called that
-needs to load the libraries (e.g. L</eval_function> L</get_variable>,
-L</eval_elisp>, L</run_elisp_on_file>, etc).
+(and any elisp code using it may need to to adapt to it's absense,
+e.g. by doing 'featurep' checks).
+
+A 'needed' file will cause an error to occur if it is not available.
+
+Note: this error does not occur during object instantiation, but
+only after a method is called that needs to load the libraries
+(e.g. L</eval_function> L</get_variable>, L</eval_elisp>,
+L</run_elisp_on_file>, etc).
 
 =item lib_data
 
@@ -312,7 +303,7 @@ sub init {
     $self->debugging(1);
   }
 
-  # enter object attributes here, including arguments that become attributes
+  # object attributes here, including arguments that become attributes
   my @attributes = qw(
                        emacs_path
                        emacs_version
@@ -335,40 +326,58 @@ sub init {
 
                        use_shell_directly
 
-                       ipc_capture_handle
                        redirector
                       );
+
+                      # phasing out:
+                      # ipc_capture_handle
 
   foreach my $field (@attributes) {
     $ATTRIBUTES{ $field } = 1;
     $self->{ $field } = $args->{ $field };
   }
 
+  # experiment: just use_shell_directly
+  $self->{ use_shell_directly } = 1;
+
   # if the shell_output_director has been set, we fall back to using the shell directly
   if ($self->{ shell_output_director }) {
     $self->{ use_shell_directly } = 1;
   }
 
-  # by default, we intermix STDOUT and STDERR
-  $self->{ shell_output_director } ||= '2>&1';
-  $self->{ redirector }            ||= 'all_output';
+  ### # by default, we intermix STDOUT and STDERR
+  ###  $self->{ shell_output_director } ||= '2>&1';
+  ###  $self->{ redirector }            ||= 'all_output';
 
-  # We will attempt to load IPC::Capture, if that fails, fall back to
-  # "use_shell_directly"... but don't bother trying this at all if
-  # we already know we're doing it that way.
-  unless ( $self->{ use_shell_directly } ) {
-    eval {
-      require IPC::Capture
-    };
-    if ( not( $@ )) {
-      my $ich = IPC::Capture->new();
-      $ich->set_filter( $self->{ redirector } );
-      $self->{ ipc_capture_handle } ||= $ich;
-    } else {
-      $self->debug("Could not require IPC::Capture: $@");
-      $self->{ use_shell_directly } = 1;
-    }
+  if( $self->{ redirector } && $self->{ shell_output_director } ) {
+    carp "redirector and shell_output_director both set: redirector takes precedence";
+  } elsif( $self->{ redirector } ) {
+    $self->{ shell_output_director } = $self->redirector_to_sod( $self->redirector );
+  } elsif ( $self->{ shell_output_director } ) {
+    $self->{ redirector } = ''; # should be ignored, in any case
+  } else {
+    # by default, we intermix STDOUT and STDERR
+    $self->{ shell_output_director } = '2>&1';
+    $self->{ redirector }            = 'all_output'; # redundant? what the hell.
   }
+
+### phasing out IPC::Capture:
+# # #   # We will attempt to load IPC::Capture, if that fails, fall back to
+# # #   # "use_shell_directly"... but don't bother trying this at all if
+# # #   # we already know we're doing it that way.
+# # #   unless ( $self->{ use_shell_directly } ) {
+# # #     eval {
+# # #       require IPC::Capture
+# # #     };
+# # #     if ( not( $@ )) {
+# # #       my $ich = IPC::Capture->new();
+# # #       $ich->set_filter( $self->{ redirector } );
+# # #       $self->{ ipc_capture_handle } ||= $ich;
+# # #     } else {
+# # #       $self->debug("Could not require IPC::Capture: $@");
+# # #       $self->{ use_shell_directly } = 1;
+# # #     }
+# # #   }
 
   # Define attributes (apply defaults, etc)
   $self->{ec_lib_loader} = '';
@@ -489,9 +498,10 @@ sub eval_function {
                                            shell_output_director => $sod,
                                           } );
   } else {
-    $return = $self->eval_elisp( $elisp, {
-                                          redirector => $redirector,
-                                          } );
+### Now use_shell_directly is always set.
+# # #     $return = $self->eval_elisp( $elisp, {
+# # #                                           redirector => $redirector,
+# # #                                           } );
   }
 
   return $return;
@@ -537,9 +547,10 @@ sub get_variable {
                                            shell_output_director => $sod,
                                           } );
   } else {
-    $return = $self->eval_elisp( $elisp, {
-                                          redirector => $redirector,
-                                          } );
+### Now use_shell_directly is always set.
+# # #     $return = $self->eval_elisp( $elisp, {
+# # #                                           redirector => $redirector,
+# # #                                           } );
   }
   return $return;
 }
@@ -573,9 +584,10 @@ sub get_load_path {
                                           shell_output_director => $sod,
                                          } );
   } else {
-    $return = $self->eval_elisp( $elisp, {
-                                          redirector => $redirector,
-                                         } );
+### Now use_shell_directly is always set.
+# # #     $return = $self->eval_elisp( $elisp, {
+# # #                                           redirector => $redirector,
+# # #                                          } );
   }
 
   my @load_path = split /\n/, $return;
@@ -595,7 +607,7 @@ if it exists, and false (0) otherwise.
 sub probe_for_option_no_splash {
   my $self = shift;
   my $subname = ( caller(0) )[3];
-  my $ich = $self->ipc_capture_handle;
+###  my $ich = $self->ipc_capture_handle;
   my $use_shell_directly = $self->use_shell_directly;
 
   my $emacs       = $self->emacs_path;
@@ -615,16 +627,17 @@ sub probe_for_option_no_splash {
     $retval = qx{ $cmd };
     $retval = $self->clean_return_value( $retval );
   } else {
-    my $cmd = qq{ $emacs --batch $before_hook };
-    $self->debug("$subname: cmd: $cmd\n");
-    $ich->set_filter('all_output');
-    $retval = $ich->run( $cmd );
-    $retval = $self->clean_return_value( $retval );
+### phasing out IPC::Capture
+# # #     my $cmd = qq{ $emacs --batch $before_hook };
+# # #     $self->debug("$subname: cmd: $cmd\n");
+# # #     $ich->set_filter('all_output');
+# # #     $retval = $ich->run( $cmd );
+# # #     $retval = $self->clean_return_value( $retval );
 
-    unless( $ich->success ) {
-      $self->debug("$subname: ipc capture call failed on: $cmd");
-      $retval = '';
-    }
+# # #     unless( $ich->success ) {
+# # #       $self->debug("$subname: ipc capture call failed on: $cmd");
+# # #       $retval = '';
+# # #     }
   }
 
   my $last_line = ( split /\n/, $retval )[-1] || '';
@@ -689,7 +702,7 @@ sub eval_elisp {
   my $opts     = shift;
   my $subname  = ( caller(0) )[3];
 
-  my $ich = $self->ipc_capture_handle;
+###  my $ich = $self->ipc_capture_handle;
 
   my $redirector = $opts->{ redirector } || $self->redirector;
   my $sod =
@@ -716,17 +729,18 @@ sub eval_elisp {
     $retval = qx{ $cmd };
     $retval = $self->clean_return_value( $retval );
   } else {
-    my $cmd = "$ec_head $ec_lib_loader $ec_tail";
-    $self->debug("$subname: cmd:\n $cmd\n");
+### phasing out IPC::Capture
+# # #     my $cmd = "$ec_head $ec_lib_loader $ec_tail";
+# # #     $self->debug("$subname: cmd:\n $cmd\n");
 
-    $ich->set_filter( $redirector);
-    $retval = $ich->run( $cmd );
-    $retval = $self->clean_return_value( $retval );
+# # #     $ich->set_filter( $redirector);
+# # #     $retval = $ich->run( $cmd );
+# # #     $retval = $self->clean_return_value( $retval );
 
-    unless( $ich->success ) {
-      $self->debug("$subname: ipc capture call failed on: $cmd");
-      $retval = '';
-    }
+# # #     unless( $ich->success ) {
+# # #       $self->debug("$subname: ipc capture call failed on: $cmd");
+# # #       $retval = '';
+# # #     }
   }
 
   $self->debug( "$subname retval:\n===\n$retval\n===\n" );
@@ -754,7 +768,7 @@ sub run_elisp_on_file {
   my $opts     = shift;
    my $subname  = ( caller(0) )[3];
 
-  my $ich = $self->ipc_capture_handle;
+###  my $ich = $self->ipc_capture_handle;
 
   my $redirector = $opts->{ redirector } || $self->redirector;
 
@@ -791,16 +805,17 @@ sub run_elisp_on_file {
     $retval = $self->clean_return_value( $retval );
 
   } else {
-    my $cmd = "$ec_head $ec_lib_loader $ec_tail";
-    $self->debug("$subname: cmd: $cmd\n");
-    $ich->set_filter( $redirector);
-    $retval = $ich->run( $cmd );
-    $retval = $self->clean_return_value( $retval );
+### phasing out IPC::Capture
+# # #     my $cmd = "$ec_head $ec_lib_loader $ec_tail";
+# # #     $self->debug("$subname: cmd: $cmd\n");
+# # #     $ich->set_filter( $redirector);
+# # #     $retval = $ich->run( $cmd );
+# # #     $retval = $self->clean_return_value( $retval );
 
-    unless( $ich->success ) {
-      $self->debug("$subname: ipc capture call failed on: $cmd");
-      $retval = '';
-    }
+# # #     unless( $ich->success ) {
+# # #       $self->debug("$subname: ipc capture call failed on: $cmd");
+# # #       $retval = '';
+# # #     }
   }
 
   $self->debug( "$subname retval:\n===\n$retval\n===\n" );
@@ -821,42 +836,42 @@ of the file.
 The main chunk of elisp run by this routine should be designed to
 output to the current buffer (e.g. via "insert" calls).
 
-The output is not captured from elisp functions such as "message"
-and "print".
+Any elisp functions such as "message" and "print" will have no
+effect on output, and neither the <L/redirector> or
+<L/shell_output_director> have any effect here.
 
-As an option, a seperate chunk of initialization elisp may also be
+As an option, a separate chunk of initialization elisp may also be
 passed in: it will be run before the output file buffer is
 opened, and hence any modification it makes to the current buffer
 will be ignored.
 
 If the "output_filename" is not supplied, a temporary file will
 be created and deleted afterwards.  If the name is supplied, the
-output file will be still exist afterwards (note: any existing
+output file will be still exist afterwards (but note: any existing
 contents will be over-written).
 
 The current buffer is saved at the end of the processing (so
 there's no need to include a "save-buffer" call in the elisp).
 
 All arguments are passed into this method via a hashref of
-"options" (though there's one "option" that is required, if you want
-it to do anything: "elisp").  These are:
+options.  These are:
 
   elisp_initialize
   output_file
   elisp
 
+Note that this last "option" is not optional: you need to supply
+some "elisp" if you want anything to happen.
 
-Some example usages:
+Example use:
 
   my $er = Emacs::Run->new({
                 load_no_inits = 1,
                 emacs_libs => [ '~/lib/my-elisp.el',
                                 '/usr/lib/site-emacs/stuff.el' ],
-
                 });
 
-Using just the required "option":
-
+  # Using just the 'elisp' argument:
   my $elisp =
     q{ (insert-file "$input_file")
        (downcase-region (point-min) (point-max))
@@ -868,8 +883,7 @@ Using just the required "option":
      }
    );
 
-Using all options:
-
+  # Using all options:
   my $output =
     $er->eval_elisp_full_emacs( {
          elisp_initialize => $elisp_initialize,
@@ -900,7 +914,7 @@ sub eval_elisp_full_emacs {
   my $opts     = shift;
   my $subname  = ( caller(0) )[3];
 
-  my $ich = $self->ipc_capture_handle;
+###  my $ich = $self->ipc_capture_handle;
 
   # unpack options
 #  my $elisp            = $opts->{ elisp };
@@ -913,8 +927,10 @@ sub eval_elisp_full_emacs {
     my $fh;
     my $unlink = not( $DEBUG );
     ($fh, $output_file) =
-      tempfile( "emacs_run_eval_elisp_full_emacs-$$-XXXX", SUFFIX => '.txt', UNLINK => $unlink );
-    close ($fh); # need to read this file, not write it (it's written to by the subprocess)
+      tempfile( "emacs_run_eval_elisp_full_emacs-$$-XXXX",
+                SUFFIX => '.txt',
+                UNLINK => $unlink );
+    close ($fh); # after it's written by the subprocess, we will read this file
   }
 
   # Have to do this to ensure that exit condition works
@@ -954,8 +970,9 @@ sub eval_elisp_full_emacs {
     ($DEBUG) && print STDERR "I'm the parent, the child pid is $pid\n";
 
     #  kill the child emacs when it's finished
-    LOOP: while(1) { # TODO loop needs to time out (what if *nothing* is written?)
-      if ( $self->full_emacs_done ({ output_file => $output_file, pid => $pid }) ){
+    LOOP: while(1) { # TODO needs to time out (what if *nothing* is written?)
+      if ( $self->full_emacs_done ({ output_file => $output_file,
+                                     pid => $pid }) ){
         sleep 1; # a little time for things to settle down (paranoia)
         my $status =
           kill 1, $pid;
@@ -1005,21 +1022,6 @@ sub full_emacs_done {
     return 0;
   }
 }
-
-
-
-
-# Alternate way of doing it, returning scalar string ref
-#   # open file, slurp, return scalar ref of contents
-#   my $contents;
-#   { undef $/;
-#     open my $fh, '<', $output_file or die "$!";
-#     $contents = <$fh>;
-#   }
-#   return \$contents;
-
-
-
 
 
 =back
@@ -1539,7 +1541,7 @@ sub probe_emacs_version {
   my $subname = ( caller(0) )[3];
   my $devnull = File::Spec->devnull();
 
-  my $ich        = $self->ipc_capture_handle;
+###  my $ich        = $self->ipc_capture_handle;
 
   my $redirector = $opts->{ redirector } || $self->redirector;
   my $sod =
@@ -1556,20 +1558,18 @@ sub probe_emacs_version {
     my $cmd = "$emacs --version $sod";
     $retval = qx{ $cmd };
   } else {
-    my $cmd = "$emacs --version";
+### phasing out IPC::Capture
+# # #     my $cmd = "$emacs --version";
 
-    $ich->set_filter( $redirector );
-    $retval = $ich->run( $cmd );
+# # #     $ich->set_filter( $redirector );
+# # #     $retval = $ich->run( $cmd );
 
-    unless( $ich->success ) {
-      $self->debug("$subname: ipc capture call failed on: $cmd");
-      return;
-    }
-
+# # #     unless( $ich->success ) {
+# # #       $self->debug("$subname: ipc capture call failed on: $cmd");
+# # #       return;
+# # #     }
   }
-
   $self->debug( "$subname:\n $retval\n" );
-
   my $version = $self->parse_emacs_version_string( $retval );
   return $version;
 }
@@ -1713,7 +1713,7 @@ sub detect_site_init {
   my $self = shift;
   my $opts = shift;
   my $subname = ( caller(0) )[3];
-  my $ich = $self->ipc_capture_handle;
+###  my $ich = $self->ipc_capture_handle;
 
   my $redirector = $opts->{ redirector } || 'all_output';
   my $sod = $opts->{ shell_output_director }    ||
@@ -1731,14 +1731,15 @@ sub detect_site_init {
     $self->debug("$subname cmd:\n $cmd\n");
     $retval = qx{ $cmd };
   } else {
-    my $cmd = qq{ $emacs --batch $before_hook -l $lib_name };
-    $ich->set_filter( $redirector);
-    $retval = $ich->run( $cmd );
+### phasing out IPC::Capture
+# # #     my $cmd = qq{ $emacs --batch $before_hook -l $lib_name };
+# # #     $ich->set_filter( $redirector);
+# # #     $retval = $ich->run( $cmd );
 
-    unless( $ich->success ) {
-      $self->debug("$subname: ipc capture call failed on: $cmd");
-      return;
-    }
+# # #     unless( $ich->success ) {
+# # #       $self->debug("$subname: ipc capture call failed on: $cmd");
+# # #       return;
+# # #     }
   }
 
   $self->debug("$subname retval:\n $retval\n");
@@ -1779,7 +1780,7 @@ sub detect_lib {
 
   return unless $lib;
 
-  my $ich = $self->ipc_capture_handle;
+###  my $ich = $self->ipc_capture_handle;
 
   my $redirector = $opts->{ redirector } || 'all_output';
   my $sod = $opts->{ shell_output_director }    ||
@@ -1798,15 +1799,15 @@ sub detect_lib {
     my $cmd = qq{ $ec_head $ec_lib_loader -l $lib $sod};
     $retval = qx{ $cmd };
   } else {
-    my $cmd = qq{ $ec_head $ec_lib_loader -l $lib};
-    $ich->set_filter( $redirector);
-    $retval = $ich->run( $cmd );
+### phasing out IPC::Capture
+# # #     my $cmd = qq{ $ec_head $ec_lib_loader -l $lib};
+# # #     $ich->set_filter( $redirector);
+# # #     $retval = $ich->run( $cmd );
 
-    unless( $ich->success ) {
-      $self->debug("$subname: ipc capture call failed on: $cmd");
-      return;
-    }
-
+# # #     unless( $ich->success ) {
+# # #       $self->debug("$subname: ipc capture call failed on: $cmd");
+# # #       return;
+# # #     }
   }
 
   if ( defined( $retval ) &&
@@ -2085,32 +2086,54 @@ sub push_emacs_libs {
 =item set_use_shell_directly
 
 Setter for object attribute L</set_use_shell_directly>.
-If this attribute is set to false, the system will
-attempt to load L<IPC::Capture>.
 
 =cut
+
+# # # If this attribute is set to false, the system will
+# # # attempt to load L<IPC::Capture>.
 
 sub set_use_shell_directly {
   my $self = shift;
   my $use_shell_directly = shift;
   $self->{ use_shell_directly } = $use_shell_directly;
 
-  unless ( $self->{ use_shell_directly } ) {
-    eval {
-      require IPC::Capture;
-    };
-    if ( not( $@ )) {
-      my $ich = IPC::Capture->new();
-      $ich->set_filter( $self->{ redirector } );
-      $self->{ ipc_capture_handle } ||= $ich;
-    } else {
-      $self->debug("Could not require IPC::Capture: $@");
-      $self->{ use_shell_directly } = 1;
-    }
-  }
+### phasing out IPC::Capture
+# # #   unless ( $self->{ use_shell_directly } ) {
+# # #     eval {
+# # #       require IPC::Capture;
+# # #     };
+# # #     if ( not( $@ )) {
+# # #       my $ich = IPC::Capture->new();
+# # #       $ich->set_filter( $self->{ redirector } );
+# # #       $self->{ ipc_capture_handle } ||= $ich;
+# # #     } else {
+# # #       $self->debug("Could not require IPC::Capture: $@");
+# # #       $self->{ use_shell_directly } = 1;
+# # #     }
+# # #   }
 
   return $use_shell_directly;
 }
+
+=item set_redirector
+
+Setter for object attribute set_redirector.
+Automatically sets the shell_output_director field.
+
+=cut
+
+sub set_redirector {
+  my $self = shift;
+  my $redirector = shift;
+  $self->{ redirector } = $redirector;
+
+  $self->{ shell_output_director } = $self->redirector_to_sod( $redirector );
+
+  return $redirector;
+}
+
+
+
 
 # automatic generation of the basic setters and getters
 sub AUTOLOAD {
@@ -2158,13 +2181,10 @@ sub AUTOLOAD {
 
 =head2 Controlling Output Redirection
 
-
-As described in the documentation for L</new>, the L</redirector> is
-a code used to control what happens to the output streams STDOUT and
-STDERR (or in elisp terms, the output from "print" or "message").
-
-These are as defined by the module L<IPC::Capture>: B<stdout_only>,
-B<stderr_only> or B<all_output>.
+As described under L</new>, the L</redirector> is a code used to
+control what happens to the output streams STDOUT and STDERR (or
+in elisp terms, the output from "print" or "message"):
+B<stdout_only>, B<stderr_only> or B<all_output>.
 
 The client programmer may not need to worry about the L</redirector> at
 all, since some (hopefully) sensible defaults have been chosen for the
@@ -2181,12 +2201,11 @@ major methods here:
      get_variable
      eval_function
 
-In addition to the L</redirector> object attribute, there is
-a standard method attribute of the same name, which can typically
-be supplied via an options hash to temporarily override
-the object L</redirector> setting.
+In addition to being able to set L</redirector> at instantiation
+(as an option to L</new>), L</redirector> can also often be set
+at the method level to temporarily override the object-level setting.
 
-If, for example, "eval_elisp" is returning some messages to STDERR
+For example, if "eval_elisp" is returning some messages to STDERR
 that you'd rather filter out, you could do that in one of two ways:
 
 Changing the object-wide default:
@@ -2199,20 +2218,15 @@ Using an option specific to this method call:
    my $er = Emacs::Run->new();
    my $result = $er->eval_elisp( $elisp_code, { redirector => 'stdout_only' } );
 
-If you needs some behavior not supported by these redirector codes,
+If you need some behavior not supported by these redirector codes,
 it is possible to use a Bourne-shell style redirect, like so:
 
    # return stdout only, but maintain an error log file
    my $er = Emacs::Run->new( { shell_output_director => "2>$logfile" } );
    my $result = $er->eval_elisp( $elisp_code );
 
-Using the L</shell_output_director> (rather than the L</redirector>) implies
-shelling out directly, without going through L<IPC::Capture>: this might
-cause portability issues for some platforms, though these days it should work
-on most common ones (including Windows).
-
-As with L</redirector>, there is a L</shell_output_director> options hash
-field as well as an object attribute.
+As with L</redirector>, the L</shell_output_director> can be set
+at the object-level or (often) at the method-level.
 
 =over
 
@@ -2222,9 +2236,6 @@ The B<shell_output_director> (sometimes called B<sod> for short) is a
 string appended to the internally generated emacs invocation commands to
 control what happens to output.
 
-Most methods here accept a hash reference of options that can include
-their own B<shell_output_director> setting.
-
 Typical values (on a unix-like system) are:
 
 =over
@@ -2232,8 +2243,7 @@ Typical values (on a unix-like system) are:
 =item  '2>&1'
 
 Intermix STDOUT and STDERR (in elisp: both "message" and "print"
-functions work).  This is the default setting for this object
-attribute.
+functions work).
 
 =item  '2>/dev/null'
 
@@ -2262,7 +2272,7 @@ return only STDOUT, but save STDERR to $log_file
 Periodically, I find myself interested in the strange world of
 running emacs code from perl.  There's a mildly obscure feature of
 emacs command line invocations called "--batch" that essentially
-transforms emacs into a lisp interpreter: other command-line
+transforms emacs into a lisp interpreter.  Additonal command-line
 options allow one to load files of elisp code and run pieces of code
 from the command-line.
 
@@ -2333,49 +2343,6 @@ facilitates that process.
 
 =back
 
-=head2 Strategies in Shelling Out
-
-Perl, of course, has some good features for running a shell
-command and capturing the output, notably qx{} (aka back-quotes).
-
-It's easy enough to append "2>&1" to a shell command when you'd
-like to see the STDERR messages intermixed with the STDOUT.
-
-This raises fears of portability problems however, which a number of
-module authors have attempted to address in different ways, my own
-being L<IPC::Capture> (which optionally uses L<IPC::Cmd> which in
-turn may use L<IPC::Run> or L<IPC::Open3>).  If L<IPC::Capture>
-is not available, this module will attempt to work by shelling out
-directly (and similarly, L<IPC::Capture> may also shell out directly
-using L<IPC::Cmd> only if needed).
-
-This module's methods typically default to capturing all output
-and returning STDOUT and STDERR intermixed; though unfortunately
-there is no good way to distinguishing between the messages from
-STDERR and STDOUT later, and your desired output may be lost in a
-forest of uninteresting notices sent to STDERR.
-
-From the elisp side, it's important to know that in "--batch" mode,
-the elisp function "message" sends output to STDERR, and you need to use
-the elisp function "print" if you'd like to send output to STDOUT.
-Perhaps unfortunately, the print function also brackets all output
-with double-quotes and newlines -- the Emacs::Run module compensates by
-unceremoniously stripping them (via L/<clean_return_value>).
-
-Note: the reasoning behind intermixing STDOUT and STDERR by default is
-that this batch-mode behavior of message and print is slightly obscure,
-even to an elisp programmer: returning I<everything> by default is more
-likely to result in code that Just Works.
-
-A new feature with the 0.3 release is the L</shell_output_director>
-attribute (plus the addition of a method-specific options to override
-that object-wide suggested default).  This provides the user with
-finer-grained control over how output is handled.
-
-And as of 0.8 an even simpler method is supplied, the L</redirector>
-code.
-
-
 =head2 Loaded vs. in load-path
 
 The emacs variable "load-path" behaves much like the shell's $PATH
@@ -2410,7 +2377,15 @@ sets X fonts for me:
   (unless (eq x-no-window-manager nil)
     (zoom-set-font "-Misc-Fixed-Bold-R-Normal--15-140-75-75-C-90-ISO8859-1"))
 
-=head2 The Tree of Method Calls
+Alternately, L</eval_elisp_full_emacs> may be used to run elisp using a
+full, externally spawned emacs, without using the --batch option:
+you'll see another emacs window temporarily spring into life, and then
+get destroyed, after passing the contents of the current-buffer back
+by using a temporary file.
+
+=head2 INTERNALS
+
+=head3 The Tree of Method Calls
 
 The potential tree of method calls now runs fairly deep.  A bug in a
 primitive such as L</detect_site_init> can have wide-ranging effects:
@@ -2522,11 +2497,18 @@ things a little (I'm manipulating load-path directly at present):
 
 loop in eval_elisp_full_emacs needs to time-out (e.g. if no output is written)
 
+
 =item *
 
-Something like eval_elisp_full_emacs should be able to do image
-capture of the external emacs process. (Allows automated tests of
-syntax coloring, etc.)
+just like the automatic save-buffer feature of eval_elisp_full_emacs,
+one could have an option that would, for example, log the entire *Messages*
+buffer to some other file.
+
+=item *
+
+Write an alternate to the eval_elisp_full_emacs that captures an
+image of the external emacs process. (Allows automated tests of
+syntax coloring, etc.)  Can this be done portably?
 
 =item *
 
@@ -2538,7 +2520,8 @@ Write more tests of redirectors -- found and fixed (?) bug in stderr_only.
 on IPC::Open3 (these don't occur when tests are run individually).
 Presumably this is related to my funky lashup:
   IPC::Capture => IPC::Cmd ==> IPC::Run and/or IPC::Open3
-Fix/remove the lashup?  Try switching to Module::Build?
+Fix/remove the lashup?  Try switching to Module::Build? (Didn't help... now
+trying ripping out IPC::Capture entirely).
 
 =back
 
