@@ -60,3 +60,11 @@ Revision history for Emacs::Run
 
 0.12  Thursday August 20, 2009   7:09 PM
       - Switching from Makemaker to Module::Build
+
+0.13  Sunday, August 23, 2009   7:07 PM
+      - Phasing out use of IPC::Capture: now just shells out directly.
+        (The additional dependencies weren't really improving portability.)
+
+0.14  Monday, August 24, 2009   12:50 PM
+      - Cleaned up after dropping use of IPC::Capture.
+

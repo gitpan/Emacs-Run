@@ -60,21 +60,17 @@ Emacs::Run - use emacs from perl via the shell
 
 =head1 DESCRIPTION
 
-Emacs::Run is a module that provides utilities to work with
-emacs when run from perl as an external process.
+Emacs::Run is a module that provides portable utilities to run
+emacs from perl as an external process.
 
-The emacs "editor" has some command-line options ("--batch" and so
-on) that turn emacs into a lisp interpreter for the elisp dialect.
-
-This module provides methods to allow perl code to portably use these
-features of emacs for tasks such as:
+This module provides methods to allow perl code to:
 
 =over
 
 =item *
 
-Probe the system's emacs installation to get the installed version, the
-user's current load-path, and so on.
+Probe the system's emacs installation to get the installed
+version, the user's current load-path, and so on.
 
 =item *
 
@@ -82,6 +78,64 @@ Run chunks of emacs lisp code without worrying too much about the
 details of quoting issues and loading libraries and so on.
 
 =back
+
+Most of the routines here make use of the emacs "--batch" feature
+that runs emacs in a non-interactive mode.  A few, such as
+L</eval_elisp_full_emacs> work by opening a full emacs window,
+and then killing it when it's no longer needed.
+
+=head2 MOTIVATION
+
+Periodically, I find myself interested in the strange world of
+running emacs code from perl.  There's a mildly obscure feature of
+emacs command line invocations called "--batch" that essentially
+transforms emacs into a lisp interpreter.  Additonal command-line
+options allow one to load files of elisp code and run pieces of code
+from the command-line.
+
+I've found several uses for this trick. You can use it to:
+
+=over
+
+=item *
+
+Write perl tools to do automated installation of elisp packages.
+
+=item *
+
+To test elisp code using a perl test harness.
+
+=item *
+
+To use code written in elisp that you don't want to rewrite in perl.
+
+=back
+
+This emacs command line invocation is a little language all of it's
+own, with just enough twists and turns to it that I've felt the need
+to write perl routines to help drive the process.
+
+At present, using Emacs::Run has one large portability advantage
+over writing your own emacs invocation code: there are some
+versions of GNU emacs21 that require the "--no-splash" option,
+but using this option would cause an error with earlier versions.
+Emacs::Run handles the necessary probing for you, and generates
+the right invocation string for the system's installed emacs.
+
+There are also some other, smaller advantages (e.g. automatic
+adjustment of the load-path to include the location of a package
+loaded as a file), and there may be more in the future.
+
+By default an "emacs --batch" run suppresses most of the usual
+init files (but does load the essentially deprecated "site-start.pl").
+
+Emacs::Run has the opposite bias: here we try to load all three
+kinds of init files, though each one of these can be shut-off
+individually if so desired.  This is because one of the main
+intended uses is to let perl find out about things such as the
+user's emacs settings (notably, the B<load-path>).  And depending
+on your application, the performance hit of loading these files
+may not seem like such a big deal these days.
 
 =head2 METHODS
 
@@ -103,10 +157,7 @@ use Env             qw( $HOME );
 use List::MoreUtils qw( any );
 use File::Temp      qw{ tempfile };
 
-### Note: phasing out IPC::Capture entirely -- Sat Aug 22 02:17:04 2009
-# IPC::Capture is used dynamically (a require done during init)
-
-our $VERSION = '0.13';
+our $VERSION = '0.14';
 my $DEBUG = 0;
 
 # needed for accessor generation
@@ -133,9 +184,8 @@ one will be used by setting this attribute.
 =item redirector
 
 A code that specifies how (by default) to handle the standard
-output and error streams from elisp run by methods such as
-L</eval_elisp> and L</run_elisp_on_file>, when L<IPC::Capture> is
-in use.
+output and error streams when using methods such as
+L</eval_elisp> and L</run_elisp_on_file>.
 
 This may be one of three values:
 
@@ -154,8 +204,8 @@ the L</shell_output_director>.
 
 =item shell_output_director
 
-A Bourne shell redirection code (e.g. '2>&1'), and alternative to
-setting L</redirector>.
+A Bourne shell redirection code (e.g. '2>&1'). This is an
+alternative to setting L</redirector>.
 
 =item before_hook
 
@@ -324,30 +374,13 @@ sub init {
                        ec_lib_loader
                        shell_output_director
 
-                       use_shell_directly
-
                        redirector
                       );
-
-                      # phasing out:
-                      # ipc_capture_handle
 
   foreach my $field (@attributes) {
     $ATTRIBUTES{ $field } = 1;
     $self->{ $field } = $args->{ $field };
   }
-
-  # experiment: just use_shell_directly
-  $self->{ use_shell_directly } = 1;
-
-  # if the shell_output_director has been set, we fall back to using the shell directly
-  if ($self->{ shell_output_director }) {
-    $self->{ use_shell_directly } = 1;
-  }
-
-  ### # by default, we intermix STDOUT and STDERR
-  ###  $self->{ shell_output_director } ||= '2>&1';
-  ###  $self->{ redirector }            ||= 'all_output';
 
   if( $self->{ redirector } && $self->{ shell_output_director } ) {
     carp "redirector and shell_output_director both set: redirector takes precedence";
@@ -360,24 +393,6 @@ sub init {
     $self->{ shell_output_director } = '2>&1';
     $self->{ redirector }            = 'all_output'; # redundant? what the hell.
   }
-
-### phasing out IPC::Capture:
-# # #   # We will attempt to load IPC::Capture, if that fails, fall back to
-# # #   # "use_shell_directly"... but don't bother trying this at all if
-# # #   # we already know we're doing it that way.
-# # #   unless ( $self->{ use_shell_directly } ) {
-# # #     eval {
-# # #       require IPC::Capture
-# # #     };
-# # #     if ( not( $@ )) {
-# # #       my $ich = IPC::Capture->new();
-# # #       $ich->set_filter( $self->{ redirector } );
-# # #       $self->{ ipc_capture_handle } ||= $ich;
-# # #     } else {
-# # #       $self->debug("Could not require IPC::Capture: $@");
-# # #       $self->{ use_shell_directly } = 1;
-# # #     }
-# # #   }
 
   # Define attributes (apply defaults, etc)
   $self->{ec_lib_loader} = '';
@@ -483,7 +498,6 @@ sub eval_function {
     $opts->{ shell_output_director }                   ||
     $self->redirector_to_sod( $redirector )            ||
     "2>$devnull";
-  my $use_shell_directly = $self->use_shell_directly || $opts->{ shell_output_director };
 
   my $elisp;
   if( $passthru ) {
@@ -492,18 +506,9 @@ sub eval_function {
     $elisp = qq{ (print ($funcname)) };
   }
 
-  my $return;
-  if( $use_shell_directly ) {
-    $return = $self->eval_elisp( $elisp, {
+  my $return = $self->eval_elisp( $elisp, {
                                            shell_output_director => $sod,
                                           } );
-  } else {
-### Now use_shell_directly is always set.
-# # #     $return = $self->eval_elisp( $elisp, {
-# # #                                           redirector => $redirector,
-# # #                                           } );
-  }
-
   return $return;
 }
 
@@ -535,23 +540,12 @@ sub get_variable {
     $opts->{ shell_output_director }                   ||
     $self->redirector_to_sod( $redirector )            ||
     "2>$devnull";
-  my $use_shell_directly = $self->use_shell_directly || $opts->{ shell_output_director };
 
   my $subname = ( caller(0) )[3];
-
   my $elisp = qq{ (print $varname) };
-
-  my $return;
-  if( $use_shell_directly ) {
-    $return = $self->eval_elisp( $elisp, {
+  my $return = $self->eval_elisp( $elisp, {
                                            shell_output_director => $sod,
                                           } );
-  } else {
-### Now use_shell_directly is always set.
-# # #     $return = $self->eval_elisp( $elisp, {
-# # #                                           redirector => $redirector,
-# # #                                           } );
-  }
   return $return;
 }
 
@@ -574,22 +568,12 @@ sub get_load_path {
     $opts->{ shell_output_director }                   ||
     $self->redirector_to_sod( $redirector )            ||
     "2>$devnull";
-  my $use_shell_directly = $self->use_shell_directly || $opts->{ shell_output_director };
 
   my $elisp = q{ (print (mapconcat 'identity load-path "\n")) };
 
-  my $return;
-  if( $use_shell_directly ) {
-    $return = $self->eval_elisp( $elisp, {
-                                          shell_output_director => $sod,
-                                         } );
-  } else {
-### Now use_shell_directly is always set.
-# # #     $return = $self->eval_elisp( $elisp, {
-# # #                                           redirector => $redirector,
-# # #                                          } );
-  }
-
+  my $return = $self->eval_elisp( $elisp, {
+                                           shell_output_director => $sod,
+                                          } );
   my @load_path = split /\n/, $return;
   \@load_path;
 }
@@ -607,8 +591,6 @@ if it exists, and false (0) otherwise.
 sub probe_for_option_no_splash {
   my $self = shift;
   my $subname = ( caller(0) )[3];
-###  my $ich = $self->ipc_capture_handle;
-  my $use_shell_directly = $self->use_shell_directly;
 
   my $emacs       = $self->emacs_path;
   my $before_hook = $self->before_hook;
@@ -618,27 +600,11 @@ sub probe_for_option_no_splash {
     return 0; # xemacs has no --no-splash
   }
 
-  my $retval;
-  # if use_shell_directly set, we do things the old way
-  if( $use_shell_directly ) {
-    my $sod = '2>&1';
-    my $cmd = qq{ $emacs --batch $before_hook $sod };
-    $self->debug("$subname: cmd: $cmd\n");
-    $retval = qx{ $cmd };
-    $retval = $self->clean_return_value( $retval );
-  } else {
-### phasing out IPC::Capture
-# # #     my $cmd = qq{ $emacs --batch $before_hook };
-# # #     $self->debug("$subname: cmd: $cmd\n");
-# # #     $ich->set_filter('all_output');
-# # #     $retval = $ich->run( $cmd );
-# # #     $retval = $self->clean_return_value( $retval );
-
-# # #     unless( $ich->success ) {
-# # #       $self->debug("$subname: ipc capture call failed on: $cmd");
-# # #       $retval = '';
-# # #     }
-  }
+  my $sod = '2>&1';
+  my $cmd = qq{ $emacs --batch $before_hook $sod };
+  $self->debug("$subname: cmd: $cmd\n");
+  my $retval = qx{ $cmd };
+  $retval = $self->clean_return_value( $retval );
 
   my $last_line = ( split /\n/, $retval )[-1] || '';
 
@@ -702,15 +668,12 @@ sub eval_elisp {
   my $opts     = shift;
   my $subname  = ( caller(0) )[3];
 
-###  my $ich = $self->ipc_capture_handle;
-
   my $redirector = $opts->{ redirector } || $self->redirector;
   my $sod =
       $opts->{ shell_output_director }                    ||
       $self->redirector_to_sod( $opts->{ redirector } )   ||
       $self->shell_output_director                        ||
       $self->redirector_to_sod( $self->redirector );
-  my $use_shell_directly = $self->use_shell_directly || $opts->{ shell_output_director };
 
   $elisp = $self->quote_elisp( $self->progn_wrapper( $elisp ));
 
@@ -721,28 +684,11 @@ sub eval_elisp {
   my $ec_tail = qq{ --eval "$elisp" };
   my $ec_lib_loader = $self->set_up_ec_lib_loader;
 
-  my $retval;
-  if( $use_shell_directly ) {
-    my $cmd = "$ec_head $ec_lib_loader $ec_tail $sod";
-    $self->debug("$subname: cmd:\n $cmd\n");
+  my $cmd = "$ec_head $ec_lib_loader $ec_tail $sod";
+  $self->debug("$subname: cmd:\n $cmd\n");
 
-    $retval = qx{ $cmd };
-    $retval = $self->clean_return_value( $retval );
-  } else {
-### phasing out IPC::Capture
-# # #     my $cmd = "$ec_head $ec_lib_loader $ec_tail";
-# # #     $self->debug("$subname: cmd:\n $cmd\n");
-
-# # #     $ich->set_filter( $redirector);
-# # #     $retval = $ich->run( $cmd );
-# # #     $retval = $self->clean_return_value( $retval );
-
-# # #     unless( $ich->success ) {
-# # #       $self->debug("$subname: ipc capture call failed on: $cmd");
-# # #       $retval = '';
-# # #     }
-  }
-
+  my $retval = qx{ $cmd };
+  $retval = $self->clean_return_value( $retval );
   $self->debug( "$subname retval:\n===\n$retval\n===\n" );
 
   return $retval;
@@ -768,8 +714,6 @@ sub run_elisp_on_file {
   my $opts     = shift;
    my $subname  = ( caller(0) )[3];
 
-###  my $ich = $self->ipc_capture_handle;
-
   my $redirector = $opts->{ redirector } || $self->redirector;
 
   my $sod =
@@ -777,8 +721,6 @@ sub run_elisp_on_file {
       ( $self->redirector_to_sod( $opts->{ redirector } )  ) ||
       ( $self->shell_output_director                       ) ||
       ( $self->redirector_to_sod( $self->redirector )      );
-
-  my $use_shell_directly = $self->use_shell_directly || $opts->{ shell_output_director };
 
   $elisp = $self->quote_elisp( $elisp );
 
@@ -797,27 +739,11 @@ sub run_elisp_on_file {
   my $ec_tail = qq{ --eval "$elisp" -f save-buffer };
   my $ec_lib_loader = $self->ec_lib_loader;
 
-  my $retval;
-  if( $use_shell_directly ) {
-    my $cmd = "$ec_head $ec_lib_loader $ec_tail $sod";
-    $self->debug("$subname: cmd: $cmd\n");
-    $retval = qx{ $cmd };
-    $retval = $self->clean_return_value( $retval );
+  my $cmd = "$ec_head $ec_lib_loader $ec_tail $sod";
+  $self->debug("$subname: cmd: $cmd\n");
 
-  } else {
-### phasing out IPC::Capture
-# # #     my $cmd = "$ec_head $ec_lib_loader $ec_tail";
-# # #     $self->debug("$subname: cmd: $cmd\n");
-# # #     $ich->set_filter( $redirector);
-# # #     $retval = $ich->run( $cmd );
-# # #     $retval = $self->clean_return_value( $retval );
-
-# # #     unless( $ich->success ) {
-# # #       $self->debug("$subname: ipc capture call failed on: $cmd");
-# # #       $retval = '';
-# # #     }
-  }
-
+  my $retval = qx{ $cmd };
+  $retval = $self->clean_return_value( $retval );
   $self->debug( "$subname retval:\n===\n$retval\n===\n" );
 
   return $retval;
@@ -826,18 +752,17 @@ sub run_elisp_on_file {
 =item eval_elisp_full_emacs
 
 Runs the given chunk(s) of elisp using a temporarily launched
-full scale emacs (not just via --batch mode).
+full scale emacs window (does not work via "--batch" mode).
 
-Of necessity, this emacs sub-process must communicate via a file
-(similar to "run_elisp_on_file"), though the output is returned
-from this routine in the form of an array reference of the lines
-of the file.
+Returns an array reference of lines of output.
 
-The main chunk of elisp run by this routine should be designed to
-output to the current buffer (e.g. via "insert" calls).
+Of necessity, this emacs sub-process must communicate through a
+file (similar to "run_elisp_on_file"), so the elisp run by this
+routine should be designed to output to the current buffer
+(e.g. via "insert" calls).
 
 Any elisp functions such as "message" and "print" will have no
-effect on output, and neither the <L/redirector> or
+direct effect on output, and neither the <L/redirector> or
 <L/shell_output_director> have any effect here.
 
 As an option, a separate chunk of initialization elisp may also be
@@ -894,8 +819,7 @@ Example use:
 
 This method only uses some of the usual Emacs::Run framework. For
 example, since it always does an "exec", many object settings
-have no meaning here: e.g. "use_shell_directly", "redirector",
-"shell_output_director".
+have no meaning here: e.g. "redirector", "shell_output_director".
 
 If "load_no_inits" is set, the emacs init files will be ignored
 (via "-q") unless, of course, they're passed in manually in
@@ -913,8 +837,6 @@ sub eval_elisp_full_emacs {
   my $self     = shift;
   my $opts     = shift;
   my $subname  = ( caller(0) )[3];
-
-###  my $ich = $self->ipc_capture_handle;
 
   # unpack options
 #  my $elisp            = $opts->{ elisp };
@@ -939,8 +861,7 @@ sub eval_elisp_full_emacs {
   my $emacs       = $self->emacs_path;
   my $before_hook = $self->before_hook;
 
-  # Covering a stupidity with some versions of gnu emacs 21:
-  # need "--no-splash" to suppress an inane splash screen.
+  # need "--no-splash" for some versions of emacs
   if ( $self->emacs_major_version eq '21' &&
        $self->emacs_type eq 'GNU Emacs' &&
        $self->probe_for_option_no_splash ) {
@@ -961,7 +882,7 @@ sub eval_elisp_full_emacs {
   push @cmd, ( "--file", "$output_file" );
   push @cmd, ( "--eval", "$elisp" );
   push @cmd, ( "-f", "save-buffer" );
-    # and if $output_file isn't current after running $elisp, it's not my problem.
+  # and if $output_file isn't current after running $elisp, it's not my problem.
 
   $self->debug("$subname: cmd: " . Dumper( \@cmd ) . "\n");
 
@@ -990,7 +911,7 @@ sub eval_elisp_full_emacs {
 
   open my $fh, '<', $output_file or die "$!";
   my @result = map{ chomp($_); s{\r$}{}xms; $_ } <$fh>;
-      # Note: stripping CRs is a hack to deal with some windows-oriented .emacs
+  # Note: stripping CRs is a hack to deal with some windows-oriented .emacs
   return \@result;
 }
 
@@ -1007,7 +928,7 @@ has been written.
 
 =cut
 
-### TODO - better to watch pid, determine when it's idle?
+### TODO - would it be better to watch the process, determine when it's idle?
 sub full_emacs_done {
   my $self = shift;
   my $opts = shift;
@@ -1541,35 +1462,17 @@ sub probe_emacs_version {
   my $subname = ( caller(0) )[3];
   my $devnull = File::Spec->devnull();
 
-###  my $ich        = $self->ipc_capture_handle;
-
   my $redirector = $opts->{ redirector } || $self->redirector;
   my $sod =
     $opts->{ shell_output_director }           ||
       $self->redirector_to_sod( $redirector )  ||
       "2>$devnull";
 
-  my $use_shell_directly = $self->use_shell_directly || $opts->{ shell_output_director };
-
   my $emacs = $self->emacs_path;
-
-  my $retval;
-  if( $use_shell_directly ) {
-    my $cmd = "$emacs --version $sod";
-    $retval = qx{ $cmd };
-  } else {
-### phasing out IPC::Capture
-# # #     my $cmd = "$emacs --version";
-
-# # #     $ich->set_filter( $redirector );
-# # #     $retval = $ich->run( $cmd );
-
-# # #     unless( $ich->success ) {
-# # #       $self->debug("$subname: ipc capture call failed on: $cmd");
-# # #       return;
-# # #     }
-  }
+  my $cmd = "$emacs --version $sod";
+  my $retval = qx{ $cmd };
   $self->debug( "$subname:\n $retval\n" );
+
   my $version = $self->parse_emacs_version_string( $retval );
   return $version;
 }
@@ -1713,35 +1616,20 @@ sub detect_site_init {
   my $self = shift;
   my $opts = shift;
   my $subname = ( caller(0) )[3];
-###  my $ich = $self->ipc_capture_handle;
 
   my $redirector = $opts->{ redirector } || 'all_output';
   my $sod = $opts->{ shell_output_director }    ||
        $self->redirector_to_sod( $redirector )  ||
        '2>&1';
-  my $use_shell_directly = $self->use_shell_directly || $opts->{ shell_output_director };
 
   my $emacs       = $self->emacs_path;
   my $before_hook = $self->before_hook;
   my $lib_name    = 'site-start';
 
-  my $retval;
-  if( $use_shell_directly ) {
-    my $cmd = qq{ $emacs --batch $before_hook -l $lib_name $sod };
-    $self->debug("$subname cmd:\n $cmd\n");
-    $retval = qx{ $cmd };
-  } else {
-### phasing out IPC::Capture
-# # #     my $cmd = qq{ $emacs --batch $before_hook -l $lib_name };
-# # #     $ich->set_filter( $redirector);
-# # #     $retval = $ich->run( $cmd );
+  my $cmd = qq{ $emacs --batch $before_hook -l $lib_name $sod };
+  $self->debug("$subname cmd:\n $cmd\n");
 
-# # #     unless( $ich->success ) {
-# # #       $self->debug("$subname: ipc capture call failed on: $cmd");
-# # #       return;
-# # #     }
-  }
-
+  my $retval = qx{ $cmd };
   $self->debug("$subname retval:\n $retval\n");
 
   if ( defined( $retval ) &&
@@ -1780,13 +1668,10 @@ sub detect_lib {
 
   return unless $lib;
 
-###  my $ich = $self->ipc_capture_handle;
-
   my $redirector = $opts->{ redirector } || 'all_output';
   my $sod = $opts->{ shell_output_director }    ||
        $self->redirector_to_sod( $redirector )  ||
        '2>&1';
-  my $use_shell_directly = $self->use_shell_directly || $opts->{ shell_output_director };
 
   my $emacs       = $self->emacs_path;
   my $before_hook = $self->before_hook;
@@ -1794,21 +1679,8 @@ sub detect_lib {
   # cmd string to load existing, presumably vetted, libs
   my $ec_lib_loader = $self->ec_lib_loader;
 
-  my $retval;
-  if( $use_shell_directly ) {
-    my $cmd = qq{ $ec_head $ec_lib_loader -l $lib $sod};
-    $retval = qx{ $cmd };
-  } else {
-### phasing out IPC::Capture
-# # #     my $cmd = qq{ $ec_head $ec_lib_loader -l $lib};
-# # #     $ich->set_filter( $redirector);
-# # #     $retval = $ich->run( $cmd );
-
-# # #     unless( $ich->success ) {
-# # #       $self->debug("$subname: ipc capture call failed on: $cmd");
-# # #       return;
-# # #     }
-  }
+  my $cmd = qq{ $ec_head $ec_lib_loader -l $lib $sod};
+  my $retval = qx{ $cmd };
 
   if ( defined( $retval ) &&
        $retval =~ m{\bCannot \s+ open \s+ load \s+ file: \s+ $lib \b}xms ) {
@@ -2083,38 +1955,6 @@ sub push_emacs_libs {
   return $emacs_libs;
 }
 
-=item set_use_shell_directly
-
-Setter for object attribute L</set_use_shell_directly>.
-
-=cut
-
-# # # If this attribute is set to false, the system will
-# # # attempt to load L<IPC::Capture>.
-
-sub set_use_shell_directly {
-  my $self = shift;
-  my $use_shell_directly = shift;
-  $self->{ use_shell_directly } = $use_shell_directly;
-
-### phasing out IPC::Capture
-# # #   unless ( $self->{ use_shell_directly } ) {
-# # #     eval {
-# # #       require IPC::Capture;
-# # #     };
-# # #     if ( not( $@ )) {
-# # #       my $ich = IPC::Capture->new();
-# # #       $ich->set_filter( $self->{ redirector } );
-# # #       $self->{ ipc_capture_handle } ||= $ich;
-# # #     } else {
-# # #       $self->debug("Could not require IPC::Capture: $@");
-# # #       $self->{ use_shell_directly } = 1;
-# # #     }
-# # #   }
-
-  return $use_shell_directly;
-}
-
 =item set_redirector
 
 Setter for object attribute set_redirector.
@@ -2267,44 +2107,6 @@ return only STDOUT, but save STDERR to $log_file
 
 =back
 
-=head2 MOTIVATION
-
-Periodically, I find myself interested in the strange world of
-running emacs code from perl.  There's a mildly obscure feature of
-emacs command line invocations called "--batch" that essentially
-transforms emacs into a lisp interpreter.  Additonal command-line
-options allow one to load files of elisp code and run pieces of code
-from the command-line.
-
-I've found several uses for this trick. You can use it to:
-
-=over
-
-=item to probe your emacs set-up from perl, e.g. for automated installation of elisp using perl tools
-
-=item to test elisp code using a perl test harness.
-
-=item to use tools written in elisp that you don't want to rewrite in perl (e.g. extract-docstrings.el)
-
-=back
-
-This emacs command line invocation is a little language all of it's
-own, with just enough twists and turns to it that I've felt the need
-to write perl routines to help drive the process.
-
-=head2 emacs invocation vs Emacs::Run
-
-By default an "emacs --batch" run suppresses most of the usual
-init files (but does load the essentially deprecated
-"site-start.pl", presumably for backwards compatibility).
-Emacs::Run has the opposite bias: here we try to load all three
-kinds of init files, though each one of these can be shut-off
-individually if so desired.  This is because one of the main
-intended uses is to let perl find out about things such as the
-user's emacs settings (notably, the B<load-path>).  And in any
-case, the performance hit of loading these files is no longer
-such a big deal.
-
 =head1 internal documentation (how the code works, etc).
 
 =head2 internal attributes
@@ -2456,8 +2258,8 @@ you mean without need for a clean-up routine).
 
 =item *
 
-Look into cache tricks (Memoize?) to speed things up a little.
-See L</The Tree of Method Calls>.
+Look into cache tricks (just Memoize?) to speed things up a
+little.  See L</The Tree of Method Calls>.
 
 =item *
 
@@ -2513,15 +2315,6 @@ syntax coloring, etc.)  Can this be done portably?
 =item *
 
 Write more tests of redirectors -- found and fixed (?) bug in stderr_only.
-
-=item *
-
-"make test" is currently showing some annoying subroutine redefined warnings
-on IPC::Open3 (these don't occur when tests are run individually).
-Presumably this is related to my funky lashup:
-  IPC::Capture => IPC::Cmd ==> IPC::Run and/or IPC::Open3
-Fix/remove the lashup?  Try switching to Module::Build? (Didn't help... now
-trying ripping out IPC::Capture entirely).
 
 =back
 
