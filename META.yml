@@ -1,6 +1,6 @@
 ---
 name: Emacs-Run
-version: 0.14
+version: 0.15
 author:
   - 'Joseph Brenner <doom@kzsu.stanford.edu>'
 abstract: use emacs from perl via the shell
@@ -26,7 +26,7 @@ build_requires:
 provides:
   Emacs::Run:
     file: lib/Emacs/Run.pm
-    version: 0.14
+    version: 0.15
 generated_by: Module::Build version 0.3
 meta-spec:
   url: http://module-build.sourceforge.net/META-spec-v1.2.html

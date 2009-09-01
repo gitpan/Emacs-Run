@@ -30,14 +30,13 @@ Emacs::Run - use emacs from perl via the shell
    my $result = $er->eval_elisp( '(print (+ 2 2))' );  # that's "4"
 
 
-  # the eval_elisp_full_emacs method works with a full externally
-  # spawned emacs (for code that won't run under '--batch')
-  my $elisp_initialize =
-    qq{
-        (defvar my-temp-var "$text")
-        (insert "This insert will not appear in output.")
-     };
-
+   # the eval_elisp_full_emacs method works with a full externally
+   # spawned emacs (for unusual code that won't run under '--batch')
+   my $elisp_initialize =
+     qq{
+         (defvar my-temp-var "$text")
+         (insert "The initialize elisp has no effect on output: you won't see this.")
+      };
    my $elisp =
      qq{
          (insert my-temp-var)
@@ -45,18 +44,18 @@ Emacs::Run - use emacs from perl via the shell
          (my-test-lib-do-something)
         };
 
-  my @emacs_libs = ( $dot_emacs, 'my-test-lib' );
+   my @emacs_libs = ( $dot_emacs, 'my-test-lib' );
 
-  my $er = Emacs::Run->new({
-                            load_no_inits => 1,
-                            emacs_libs    => \@emacs_libs,
-                           });
+   my $er = Emacs::Run->new({
+                             load_no_inits => 1,
+                             emacs_libs    => \@emacs_libs,
+                            });
 
-  my $modified_lines_aref =
-    $er->eval_elisp_full_emacs( {
-         elisp_initialize => $elisp_initialize,
-         output_file      => $name_list_file,    # omit to use temp file
-         elisp            => $elisp,
+   my $output_lines_aref =
+     $er->eval_elisp_full_emacs( {
+          elisp_initialize => $elisp_initialize,
+          output_file      => $name_list_file,    # omit to use temp file
+          elisp            => $elisp,
 
 =head1 DESCRIPTION
 
@@ -93,7 +92,7 @@ transforms emacs into a lisp interpreter.  Additonal command-line
 options allow one to load files of elisp code and run pieces of code
 from the command-line.
 
-I've found several uses for this trick. You can use it to:
+I've found several uses for this tricks. You can use it to:
 
 =over
 
@@ -117,7 +116,7 @@ to write perl routines to help drive the process.
 
 At present, using Emacs::Run has one large portability advantage
 over writing your own emacs invocation code: there are some
-versions of GNU emacs21 that require the "--no-splash" option,
+versions of GNU emacs 21 that require the "--no-splash" option,
 but using this option would cause an error with earlier versions.
 Emacs::Run handles the necessary probing for you, and generates
 the right invocation string for the system's installed emacs.
@@ -126,9 +125,8 @@ There are also some other, smaller advantages (e.g. automatic
 adjustment of the load-path to include the location of a package
 loaded as a file), and there may be more in the future.
 
-By default an "emacs --batch" run suppresses most of the usual
-init files (but does load the essentially deprecated "site-start.pl").
-
+A raw "emacs --batch" run would suppress most of the usual init
+files (but does load the essentially deprecated "site-start.pl").
 Emacs::Run has the opposite bias: here we try to load all three
 kinds of init files, though each one of these can be shut-off
 individually if so desired.  This is because one of the main
@@ -157,7 +155,7 @@ use Env             qw( $HOME );
 use List::MoreUtils qw( any );
 use File::Temp      qw{ tempfile };
 
-our $VERSION = '0.14';
+our $VERSION = '0.15';
 my $DEBUG = 0;
 
 # needed for accessor generation
@@ -175,17 +173,17 @@ to the names of the object attributes. These attributes are:
 
 =item emacs_path
 
-By default, this code looks for an external program called 'emacs'
-letting the system (e.g. the shell's PATH environment variable) find
-the program if it can. If you have multiple emacsen installed in
-different places and/or under different names, you can choose which
-one will be used by setting this attribute.
+Indicates how to find the emacs program.  Defaults to 'emacs', which
+lets the system (e.g. the shell's PATH environment variable) find the
+program if it can. If you have multiple emacsen installed in different
+places and/or under different names, you can choose which one will be
+used by setting this attribute.
 
 =item redirector
 
-A code that specifies how (by default) to handle the standard
-output and error streams when using methods such as
-L</eval_elisp> and L</run_elisp_on_file>.
+A code that specifies how the default way of handling the
+standard output and error streams for some methods, such as
+L</eval_elisp>, L</run_elisp_on_file> and L</eval_function>.
 
 This may be one of three values:
 
@@ -195,7 +193,7 @@ This may be one of three values:
 
 =item stderr_only
 
-=item all_output
+=item all_output  (object default -- some methods may differ)
 
 =back
 
@@ -375,6 +373,8 @@ sub init {
                        shell_output_director
 
                        redirector
+
+                       message_log
                       );
 
   foreach my $field (@attributes) {
@@ -383,11 +383,12 @@ sub init {
   }
 
   if( $self->{ redirector } && $self->{ shell_output_director } ) {
-    carp "redirector and shell_output_director both set: redirector takes precedence";
-  } elsif( $self->{ redirector } ) {
+    carp "redirector takes precedence: shell_output_director setting ignored.";
+  }
+  if( $self->{ redirector } ) {
     $self->{ shell_output_director } = $self->redirector_to_sod( $self->redirector );
   } elsif ( $self->{ shell_output_director } ) {
-    $self->{ redirector } = ''; # should be ignored, in any case
+    $self->{ redirector } = ''; # shouldn't matter now, in any case
   } else {
     # by default, we intermix STDOUT and STDERR
     $self->{ shell_output_director } = '2>&1';
@@ -400,8 +401,11 @@ sub init {
   # If we weren't given a path, let the $PATH sort it out
   $self->{ emacs_path } ||= 'emacs';
 
-  # Determine the emacs version if we haven't been told already
+  # Determine the emacs version (if we haven't been told already - but why override TODO?)
   $self->{ emacs_version } ||= $self->probe_emacs_version;
+  unless( $self->{ emacs_version } ) {  # if emacs is not found, just bail
+    return;
+  }
 
   # By default, we like to load all init files
   $self->{load_emacs_init}   = 1 unless defined( $self->{load_emacs_init}   );
@@ -426,14 +430,15 @@ sub init {
 
   if( defined( my $emacs_libs = $self->{ emacs_libs } ) ) {
     $self->process_emacs_libs_addition( $emacs_libs );
+  } else {
+    # called indirectly by process_emacs_libs_addition.
+    # no point in doing it again, *unless* no emacs_libs
+    $self->set_up_ec_lib_loader;
   }
-
-  $self->set_up_ec_lib_loader;
 
   lock_keys( %{ $self } );
   return $self;
 }
-
 
 
 =back
@@ -528,6 +533,8 @@ the "load-path" variable might look like:
 
 See L</get_load_path> below for a more perl-friendly way of doing this.
 
+Ignores redirector/shell_output_director.
+
 =cut
 
 sub get_variable {
@@ -535,11 +542,9 @@ sub get_variable {
   my $varname = shift;
   my $opts    = shift;
   my $devnull = File::Spec->devnull();
-  my $redirector = $opts->{ redirector } || "stdout_only";
-  my $sod =
-    $opts->{ shell_output_director }                   ||
-    $self->redirector_to_sod( $redirector )            ||
-    "2>$devnull";
+
+  my $redirector = 'stdout_only';
+  my $sod = $self->redirector_to_sod( $redirector );
 
   my $subname = ( caller(0) )[3];
   my $elisp = qq{ (print $varname) };
@@ -557,17 +562,17 @@ user's .emacs, if it can be found) as a reference to a perl array.
 Changing the $HOME environment variable before running this method
 results in loading the .emacs file located in the new $HOME.
 
+Ignores redirector/shell_output_director.
+
 =cut
 
 sub get_load_path {
   my $self = shift;
   my $opts = shift;
   my $devnull = File::Spec->devnull();
-  my $redirector = $opts->{ redirector } || "stdout_only";
-  my $sod =
-    $opts->{ shell_output_director }                   ||
-    $self->redirector_to_sod( $redirector )            ||
-    "2>$devnull";
+
+  my $redirector = 'stdout_only';
+  my $sod = $self->redirector_to_sod( $redirector );
 
   my $elisp = q{ (print (mapconcat 'identity load-path "\n")) };
 
@@ -585,6 +590,8 @@ sub get_load_path {
 Looks for the emacs command line option "--no-splash", returning true (1)
 if it exists, and false (0) otherwise.
 
+Ignores redirector/shell_output_director.
+
 =cut
 
 # earlier versions called this "no_splash_p"
@@ -601,6 +608,7 @@ sub probe_for_option_no_splash {
   }
 
   my $sod = '2>&1';
+
   my $cmd = qq{ $emacs --batch $before_hook $sod };
   $self->debug("$subname: cmd: $cmd\n");
   my $retval = qx{ $cmd };
@@ -798,7 +806,7 @@ Example use:
 
   # Using just the 'elisp' argument:
   my $elisp =
-    q{ (insert-file "$input_file")
+    qq{ (insert-file "$input_file")
        (downcase-region (point-min) (point-max))
      };
 
@@ -814,22 +822,26 @@ Example use:
          elisp_initialize => $elisp_initialize,
          output_file      => $output_file,
          elisp            => $elisp,
+         message_log      => '/tmp/message.log',
      }
    );
 
-This method only uses some of the usual Emacs::Run framework. For
-example, since it always does an "exec", many object settings
-have no meaning here: e.g. "redirector", "shell_output_director".
+This method only uses some of the usual Emacs::Run framework:
 
+The three individual init settings flags have no effect on this
+method ("load_emacs_init", "load_site_init", "load_default_init").
 If "load_no_inits" is set, the emacs init files will be ignored
-(via "-q") unless, of course, they're passed in manually in
-the "emacs_libs" array reference.  The three individual init settings
-flags have no effect on this method ("load_emacs_init", "load_site_init",
-"load_default_init").
+(via "-q") unless, of course, they're passed in manually in the
+"emacs_libs" array reference.
 
 Adding libraries to emacs_libs will not automatically add their
 locations to the load-path (because the "ec_lib_loader" system is
 not in use here).
+
+Ignores redirector/shell_output_director.
+
+If the option "message_log" contains the name of a log file
+the emacs '*Messages*' buffer will be appended to it.
 
 =cut
 
@@ -843,6 +855,8 @@ sub eval_elisp_full_emacs {
   my $elisp_initialize = $self->progn_wrapper( $opts->{ elisp_initialize } );
   my $elisp            = $self->progn_wrapper( $opts->{ elisp } );
   my $output_file      = $opts->{ output_file };
+
+  my $message_log      = $opts->{ message_log } || $self->message_log;
 
   # if $output_file is blank, need to pick a temp file to use.
   unless( $output_file ) {
@@ -868,6 +882,24 @@ sub eval_elisp_full_emacs {
     $before_hook .= ' --no-splash ';
   }
 
+  my $elisp_log_messages = $self->progn_wrapper(
+    $message_log ?
+    qq{
+    (find-file "$message_log")
+    (insert (format "\n $0 logging *Messages* - %s\n" (current-time-string)))
+    (goto-char (point-max))
+    (insert-buffer "*Messages*")
+    } : ''
+   );
+  ($DEBUG) && print STDERR "\n$elisp_log_messages\n\n";
+
+  my $output_buffer = basename( $output_file );
+  my $elisp_back_to_output =
+    qq{
+      (switch-to-buffer "$output_buffer")
+    };
+  ($DEBUG) && print STDERR "\n", $elisp_back_to_output, "\n\n";
+
   # Build up the command arguments
   my @cmd;
   push @cmd, ( "emacs_from_" . "$$" );  # just the process label, not the binary
@@ -881,8 +913,14 @@ sub eval_elisp_full_emacs {
   push @cmd, ( "--eval", "$elisp_initialize" ) if $elisp_initialize;
   push @cmd, ( "--file", "$output_file" );
   push @cmd, ( "--eval", "$elisp" );
+
+  if ($message_log) {
+    push @cmd, ( "--eval", "$elisp_log_messages" );
+    push @cmd, ( "-f", "save-buffer" );
+  }
+
+  push @cmd, ( "--eval", "$elisp_back_to_output" );
   push @cmd, ( "-f", "save-buffer" );
-  # and if $output_file isn't current after running $elisp, it's not my problem.
 
   $self->debug("$subname: cmd: " . Dumper( \@cmd ) . "\n");
 
@@ -928,7 +966,7 @@ has been written.
 
 =cut
 
-### TODO - would it be better to watch the process, determine when it's idle?
+### TODO - would be better to watch the process somehow and determine when it's idle.
 sub full_emacs_done {
   my $self = shift;
   my $opts = shift;
@@ -936,7 +974,7 @@ sub full_emacs_done {
   my $pid         = $opts->{ pid };
   my $output_file = $opts->{ output_file };
 
-  my $cutoff = 0;      # increase, if this seems flaky
+  my $cutoff = 0;      # could increase, if this seems flaky
   if ( (-e $output_file) && ( (-s $output_file) > $cutoff ) ) {
     return 1;
   } else {
@@ -1218,7 +1256,8 @@ libraries specified in the object data.
 
 Returns the newly defined $ec_lib_loader string.
 
-This routine is called by L</init> during object initialization.
+This routine is called (indirectly) by L</init> during object
+initialization.
 
 =cut
 
@@ -1239,22 +1278,13 @@ sub set_up_ec_lib_loader {
     unless ( $type ) {
       $type = $self->lib_or_file( $name );
       $rec->[1]->{type} = $type;
-
-#       # experimental code -- Wed Apr  1 11:46:48 2009
-#       # needed to fix handling of relative paths (with "..")?
-#       if ($type eq 'file') {
-#         $name = abs_path( $name ); # returns undef if not -e
-#         $rec->[0] = $name;
-#       }
-
     }
     unless ( $priority ) {
       $priority = $self->default_priority;
       $rec->[1]->{priority} = $priority;
     }
 
-    my $method = sprintf
-      "genec_loader_%s_%s", $type, $priority;
+    my $method = sprintf "genec_loader_%s_%s", $type, $priority;
     $self->$method( $name );   # appends to ec_lib_loader
   }
 
@@ -1323,12 +1353,13 @@ sub genec_load_emacs_init {
 =item Genec Methods Called Dynamically
 
 The following is a set of four routines used by
-"set_ec_lib_loader" (( TODO check that name )) to generate a
-string that can be included in an emacs command line invocation
-to load the given library.  The methods here are named according
-to the pattern:
+"set_up_ec_lib_loader" to generate a string that can be included
+in an emacs command line invocation to load the given library.
+The methods here are named according to the pattern:
 
   "genec_loader_$type_$priority"
+
+where type is 'lib' or 'file' and priority is 'requested' or 'needed'.
 
 All of these methods return the generated string, but also append it
 to the L</ec_lib_loader> attribute.
@@ -1443,16 +1474,7 @@ details about the emacs version:
   emacs_major_version
   emacs_type
 
-By default the returned output includes just STDOUT and not STDERR
-(and the object attribute L</shell_output_director> is ignored),
-but this behavior can be overridden by setting a field named
-B<shell_output_director> in the options hashref.
-
-An example of that usage:
-
-  my $version_text =
-    $er->probe_emacs_version(  { shell_output_director => '2>&1',
-                                } );
+Ignores redirector/shell_output_director.
 
 =cut
 
@@ -1462,16 +1484,13 @@ sub probe_emacs_version {
   my $subname = ( caller(0) )[3];
   my $devnull = File::Spec->devnull();
 
-  my $redirector = $opts->{ redirector } || $self->redirector;
-  my $sod =
-    $opts->{ shell_output_director }           ||
-      $self->redirector_to_sod( $redirector )  ||
-      "2>$devnull";
+  my $redirector = 'stdout_only';
+  my $sod = $self->redirector_to_sod( $redirector );
 
   my $emacs = $self->emacs_path;
   my $cmd = "$emacs --version $sod";
   my $retval = qx{ $cmd };
-  $self->debug( "$subname:\n $retval\n" );
+  # $self->debug( "$subname:\n $retval\n" );
 
   my $version = $self->parse_emacs_version_string( $retval );
   return $version;
@@ -1505,6 +1524,9 @@ See probe_emacs_version (which uses this internally).
 sub parse_emacs_version_string {
   my $self           = shift;
   my $version_mess   = shift;
+  unless( $version_mess ) {
+    return;
+  }
 
   my ($emacs_type, $version);
   # TODO assuming versions are digits only (\d). Ever have letters, e.g. 'b'?
@@ -1603,6 +1625,8 @@ anything else, so this method replicates that behavior.
 
 Returns the library name ('site-start') if found, undef if not.
 
+Ignores redirector/shell_output_director.
+
 =cut
 
 # runs an emacs batch process as a probe, and if the command
@@ -1617,10 +1641,8 @@ sub detect_site_init {
   my $opts = shift;
   my $subname = ( caller(0) )[3];
 
-  my $redirector = $opts->{ redirector } || 'all_output';
-  my $sod = $opts->{ shell_output_director }    ||
-       $self->redirector_to_sod( $redirector )  ||
-       '2>&1';
+  my $redirector = 'all_output';
+  my $sod = $self->redirector_to_sod( $redirector );
 
   my $emacs       = $self->emacs_path;
   my $before_hook = $self->before_hook;
@@ -1658,6 +1680,8 @@ Example usage:
 
    my @good_libs = grep { defined($_) } map{ $self->detect_lib($_) } @candidate_libs;
 
+Ignores redirector/shell_output_director.
+
 =cut
 
 sub detect_lib {
@@ -1668,10 +1692,8 @@ sub detect_lib {
 
   return unless $lib;
 
-  my $redirector = $opts->{ redirector } || 'all_output';
-  my $sod = $opts->{ shell_output_director }    ||
-       $self->redirector_to_sod( $redirector )  ||
-       '2>&1';
+  my $redirector = 'all_output';
+  my $sod = $self->redirector_to_sod( $redirector );
 
   my $emacs       = $self->emacs_path;
   my $before_hook = $self->before_hook;
@@ -2298,13 +2320,6 @@ things a little (I'm manipulating load-path directly at present):
 =item *
 
 loop in eval_elisp_full_emacs needs to time-out (e.g. if no output is written)
-
-
-=item *
-
-just like the automatic save-buffer feature of eval_elisp_full_emacs,
-one could have an option that would, for example, log the entire *Messages*
-buffer to some other file.
 
 =item *
 

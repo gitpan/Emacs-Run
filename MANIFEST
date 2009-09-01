@@ -3,10 +3,10 @@ Changes
 MANIFEST
 README
 lib/Emacs/Run.pm
-t/00-load.t
 t/pod-coverage.t
 t/pod.t
-t/01-basic_object_creation.t
+t/00-load.t
+t/01-instantiation_failure_without_emacs.t
 t/02-parse_emacs_version_strings.t
 t/03-distinguish_lib_or_file.t
 t/04-working_with_emacs.t
@@ -41,6 +41,5 @@ t/dat/usr/lib-target/shadowed.el
 t/dat/usr/lib-alpha/null.el
 t/dat/usr/lib-alpha/payload.el
 t/dat/READTHIS
-
 Makefile.PL
 META.yml

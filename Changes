@@ -68,3 +68,9 @@ Revision history for Emacs::Run
 0.14  Monday, August 24, 2009   12:50 PM
       - Cleaned up after dropping use of IPC::Capture.
 
+0.15  Tuesday September  1, 2009  12:33 AM
+      - Dropped use of "redirector" setting for methods where it
+        made little sense to use it (e.g. "get_variable", "get_load_path).
+      - Added feature to eval_elisp_full_emacs to assist in debugging:
+        If the option "message_log" contains the name of a log file
+        the emacs '*Messages*' buffer will be appended to it.

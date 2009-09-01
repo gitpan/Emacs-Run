@@ -14,36 +14,21 @@ use Test::Differences;
 
 use FindBin qw( $Bin ); #
 use lib "$Bin/../lib";
+use Emacs::Run;  # can't use "use_ok", no plan yet
 
-# Globals
-my $CLASS   = 'Emacs::Run';
+## Globals
+# A basic Emacs::Run object
+my $ER = Emacs::Run->new(
+   #                     { emacs_path => 'uncomment_this_to_skip_all_tests',}
+                        );
 
-my $devnull = File::Spec->devnull;
-my $emacs_found;
-eval {
-  $emacs_found = qx{ emacs --version 2>$devnull };
-};
-if($@) {
-  $emacs_found = '';
-  print STDERR "Problem with qx of emacs: $@\n" if $DEBUG;
-}
-
-if( not( $emacs_found ) ) {
+if( not( $ER ) ) {    # then 'emacs' was not found
   plan skip_all => 'emacs was not found in PATH';
 } else {
-  plan tests => 19;
+  plan tests => 17;
 }
-
-use_ok( $CLASS );
 
 ok(1, "Traditional: If we made it this far, we're ok.");
-
-{
-  my $test_name = "Testing basic creation of object of $CLASS";
-  my $obj  = $CLASS->new();
-  my $type = ref( $obj );
-  is( $type, $CLASS, $test_name );
-}
 
 {
   my $test_name = "Testing emacs_version method";

@@ -23,9 +23,7 @@ The tests require:
    Test::Differences
    Test::More
 
-If this module is present, this code may use it under some circumstances:
-   IPC::Capture
-(This in turn uses IPC::Cmd, which in turn may use IPC::Open3 or IPC::Run).
+Note: dependecy on IPC::Capture has been dropped as of version 0.13.
 
 SUPPORT AND DOCUMENTATION
 

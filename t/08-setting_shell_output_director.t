@@ -50,135 +50,14 @@ if($@) {
 if( not( $emacs_found ) ) {
   plan skip_all => 'emacs was not found in PATH';
 } else {
-  plan tests => 23;
+  plan tests => 14;
 }
 
 use_ok( $CLASS );
 
-ok(1, "Traditional: If we made it this far, we're ok."); #2
+ok(1, "Traditional: If we made it this far, we're ok.");
 
-{#3, #4, #5
-  my $method = "get_load_path";
-  my $test_name = "Testing $method, with shell_output_director";
-
-  my $mock_home = "$Bin/dat/home/mockingbird";
-  my $code_lib = "$USR/lib";
-  my $code_lib_alt = "$USR/lib-alt";
-  my $dot_emacs_tpl = "$SRC_LOC/templates/.emacs-template";
-
-  create_dot_emacs_in_mock_home( $mock_home, $code_lib, $code_lib_alt, $dot_emacs_tpl );
-
-  # change the environment variable $HOME to point at the $mock_home
-  $ENV{HOME} = $mock_home;
-  echo_home() if $DEBUG;
-
-  my ($er, $load_path_aref, $expected_load_path_aref, $set);
-
-  $er = Emacs::Run->new;
-  $load_path_aref = $er->$method;
-  print STDERR "\nload_path_aref:\n", Dumper($load_path_aref), "\n" if $DEBUG;
-  $expected_load_path_aref =
-    [
-     '/tmp',
-     "$code_lib",
-     "$code_lib_alt",
-     ];
-  is_deeply( $load_path_aref, $expected_load_path_aref,
-             "$test_name unset" );
-
-  #4
-  $set = "1>$devnull 2>&1"; # toss all output
-  $er = Emacs::Run->new;
-  $load_path_aref = $er->$method({
-                                     shell_output_director => $set
-                                    });
-  print STDERR "\nload_path_aref:\n", Dumper($load_path_aref), "\n" if $DEBUG;
-  $expected_load_path_aref = [ ];
-  is_deeply( $load_path_aref, $expected_load_path_aref,
-             "$test_name set to $set on method" );
-
-  #5
-  $set = "1>$devnull 2>&1"; # toss all output
-  $er = Emacs::Run->new({
-                         shell_output_director => $set
-                        });
-  $load_path_aref = $er->$method();
-  print STDERR "\nload_path_aref:\n", Dumper($load_path_aref), "\n" if $DEBUG;
-  $expected_load_path_aref =    [
-                                 '/tmp',
-                                 "$USR/lib",
-                                 "$USR/lib-alt",
-                                ];
-  is_deeply( $load_path_aref, $expected_load_path_aref,
-             "$test_name set in new, and hence ignored" );
-}
-
-{#6, #7, #8
-  my $method = "get_variable";
-  my $test_name = "Testing $method";
-
-  my $mock_home     = "$Bin/dat/home/nicesuit";
-  my $code_lib      = "$USR/lib";
-  my $code_lib_alt  = "$USR/lib-alt";
-  my $dot_emacs_tpl = "$SRC_LOC/templates/.emacs-6-template";
-
-  create_dot_emacs_in_mock_home( $mock_home, $code_lib, $code_lib_alt, $dot_emacs_tpl );
-
-  # change the environment variable $HOME to point at the $mock_home
-  $ENV{HOME} = $mock_home;
-  echo_home() if $DEBUG;
-
-  # print STDERR "Note: with emacs all variables are global & long names are wise...\n";
-
-  # expected values for given names for each of the options_sets (defined below)
-  my @name_value = (
-   {
-   'emacs-run-testorama-garudabird-knock-off-i-am-not-a-number-i-am-unique-dammit' =>
-     '6',
-   'emacs-run-testorama-tomb-of-the-unknown-varname' =>
-     '',
-    },
-   {
-   'emacs-run-testorama-garudabird-knock-off-i-am-not-a-number-i-am-unique-dammit' =>
-     '6',
-   'emacs-run-testorama-tomb-of-the-unknown-varname' =>
-     '',
-    },
-   {
-   'emacs-run-testorama-garudabird-knock-off-i-am-not-a-number-i-am-unique-dammit' =>
-     "But I am not in error!\n6",
-   'emacs-run-testorama-not-a-varname-really' =>
-     "But I am not in error!\nSymbol's value as variable is void: emacs-run-testorama-not-a-varname-really",
-    },
-  );
-
-  print STDERR "name_value array of hashrefs: \n" . Dumper(\@name_value) . "\n" if $DEBUG;
-
-  my $sod = '2>&1';
-
-  # pairs of options arrays, the first fed into new, the second fed into the method
-  my @options_sets = (
-                   [ {},                            {} ],
-                   [ {shell_output_director=>$sod}, {} ],
-                   [ {},                            {shell_output_director=>$sod} ],
-                  );
-
-  for my $i (0..2) {
-
-    my $new_opts  = $options_sets[ $i ][0];
-    my $meth_opts = $options_sets[ $i ][1];
-
- foreach my $varname (sort keys %{ $name_value[ $i ] }){
-      my $er = Emacs::Run->new( $new_opts );
-      my $result = $er->$method( $varname, $meth_opts );
-      my $expected = $name_value[ $i ]->{ $varname };
-      my $label = get_short_label_from_name( $varname );
-      is( $result, $expected, "$test_name: $label, option set: $i" );
-    }
-  }
-}
-
-{ #12...
+{
   my $test_name = "Testing run_elisp_on_file";
 
   my $mock_home     = "$Bin/dat/home/penguindust";

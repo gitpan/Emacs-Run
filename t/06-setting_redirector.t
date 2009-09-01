@@ -37,7 +37,7 @@ if($@) {
 if( not( $emacs_found ) ) {
   plan skip_all => 'emacs was not found in PATH';
 } else {
-  plan tests => 23;
+  plan tests => 20;
 }
 
 if ($DEBUG) {
@@ -50,9 +50,8 @@ use_ok( $CLASS );
 
 ok(1, "Traditional: If we made it this far, we're ok."); #2
 
-{#3, #4, #5
-  my $method = "get_load_path";
-  my $test_name = "Testing $method, with redirector";
+{
+  my $test_name = "Testing redirector, with eval_elisp";
 
   my $mock_home = "$Bin/dat/home/mockingbird";
   my $code_lib = "$USR/lib";
@@ -63,112 +62,81 @@ ok(1, "Traditional: If we made it this far, we're ok."); #2
 
   # change the environment variable $HOME to point at the $mock_home
   $ENV{HOME} = $mock_home;
-  echo_home() if $DEBUG;
+  ($DEBUG) && echo_home();
 
-  my ($er, $load_path_aref, $expected_load_path_aref, $set);
+  my $stderr_mess = "i am stderr";
+  my $stdout_mess = "i am stdout";
 
-  $er = Emacs::Run->new;
-  $load_path_aref = $er->$method;
-  print STDERR "\nload_path_aref:\n", Dumper($load_path_aref), "\n" if $DEBUG;
-  $expected_load_path_aref =
-    [
-     '/tmp',
-     "$code_lib",
-     "$code_lib_alt",
-     ];
-  is_deeply( $load_path_aref, $expected_load_path_aref,
-             "$test_name unset" );
+  my $elisp = "(message \"$stderr_mess\") (prin1 \"$stdout_mess\")";
 
-  #4
-  $set = "stderr_only";
-  $er = Emacs::Run->new;
-  $load_path_aref = $er->$method({
-                                     redirector => $set
-                                    });
-  print STDERR "\nload_path_aref:\n", Dumper($load_path_aref), "\n" if $DEBUG;
-  $expected_load_path_aref = [ ];
-  print STDERR "\nexpected_load_path_aref:\n", Dumper($expected_load_path_aref), "\n" if $DEBUG;
-  is_deeply( $load_path_aref, $expected_load_path_aref,
-             "$test_name set to $set on method" );
+  {
+    my $sub_test = "default behavior";
+    my ($er, $result);
+    $er = Emacs::Run->new;
+    $result = $er->eval_elisp( $elisp );
+    ($DEBUG) && print STDERR "$sub_test, result: \n$result\n\n";
 
-  #5
-  $set = "stderr_only";
-  $er = Emacs::Run->new({
-                         redirector => $set
-                        });
-  $load_path_aref = $er->$method();
-  print STDERR "\nload_path_aref:\n", Dumper($load_path_aref), "\n" if $DEBUG;
-  $expected_load_path_aref =    [
-                                 '/tmp',
-                                 "$USR/lib",
-                                 "$USR/lib-alt",
-                                ];
-  is_deeply( $load_path_aref, $expected_load_path_aref,
-             "$test_name set in new, and hence ignored" );
-}
+    # default behavior is both stdout and stderr: stderr *should* be first,
+    # but here we allow either order.
+    ok( ( $result =~ /\Q$stderr_mess\E/ )&&
+        ( $result =~ /\Q$stdout_mess\E/ ),
+        "$test_name: $sub_test" ) or
+          print STDERR "$test_name: $sub_test, result is: $result";
+  }
 
-{#6, #7, #8
-  my $method = "get_variable";
-  my $test_name = "Testing $method";
+  {
+    my $sub_test = "stdout_only set on method";
+    my ($er, $result);
+    $er = Emacs::Run->new;
+    $result = $er->eval_elisp( $elisp, { redirector => 'stdout_only' });
+    ($DEBUG) && print STDERR "$sub_test, result: $result\n";
+    is( $result, $stdout_mess, "$test_name: $sub_test" );
+  }
 
-  my $mock_home     = "$Bin/dat/home/nicesuit";
-  my $code_lib      = "$USR/lib";
-  my $code_lib_alt  = "$USR/lib-alt";
-  my $dot_emacs_tpl = "$SRC_LOC/templates/.emacs-6-template";
+  {
+    my $sub_test = "stderr_only set on method";
+    my ($er, $result);
+    $er = Emacs::Run->new;
+    $result = $er->eval_elisp( $elisp, { redirector => 'stderr_only' });
+    ($DEBUG) && print STDERR "$sub_test, result: $result\n";
+    is( $result, $stderr_mess, "$test_name: $sub_test" );
+  }
 
-  create_dot_emacs_in_mock_home( $mock_home, $code_lib, $code_lib_alt, $dot_emacs_tpl );
+  {
+    my $sub_test = "all_output";
+    my ($er, $result);
+    $er = Emacs::Run->new;
+    $result = $er->eval_elisp( $elisp );
+    ($DEBUG) && print STDERR "$sub_test, result: $result\n";
 
-  # change the environment variable $HOME to point at the $mock_home
-  $ENV{HOME} = $mock_home;
-  echo_home() if $DEBUG;
+    # stderr *should* be first, but here we allow either order.
+    ok( $result =~ /\Q$stderr_mess\E/ &&
+        $result =~ /\Q$stdout_mess\E/,
+        "$test_name: $sub_test" ) or
+          print STDERR "$test_name: $sub_test, result is: $result";
+  }
 
-  # print STDERR "Note: with emacs all variables are global & long names are wise...\n";
 
-  # expected values for given names for each of the options_sets (defined below)
-  my @name_value = (
-   {
-   'emacs-run-testorama-garudabird-knock-off-i-am-not-a-number-i-am-unique-dammit' =>
-     '6',
-   'emacs-run-testorama-tomb-of-the-unknown-varname' =>
-     '',
-    },
-   {
-   'emacs-run-testorama-garudabird-knock-off-i-am-not-a-number-i-am-unique-dammit' =>
-     '6',
-   'emacs-run-testorama-tomb-of-the-unknown-varname' =>
-     '',
-    },
-   {
-   'emacs-run-testorama-garudabird-knock-off-i-am-not-a-number-i-am-unique-dammit' =>
-     "But I am not in error!\n6",
-   'emacs-run-testorama-not-a-varname-really' =>
-     "But I am not in error!\nSymbol's value as variable is void: emacs-run-testorama-not-a-varname-really",
-    },
-  );
+  {
+    my $sub_test = "stderr_only set on object";
+    my ($er, $result);
+    $er = Emacs::Run->new({
+                           redirector => 'stderr_only',
+                          });
+    $result = $er->eval_elisp( $elisp, { redirector => 'stderr_only' });
+    ($DEBUG) && print STDERR "$sub_test, result: $result\n";
+    is( $result, $stderr_mess, "$test_name: $sub_test" );
+  }
 
-  print STDERR "name_value array of hashrefs: \n" . Dumper(\@name_value) . "\n" if $DEBUG;
-
-  my $redirector = 'all_output';
-
-  # pairs of options arrays, the first fed into new, the second fed into the method
-  my @options_sets = (
-                   [ {},                            {} ],
-                   [ {redirector=>$redirector}, {} ],
-                   [ {},                            {redirector=>$redirector} ],
-                  );
-
-  for my $i (0..2) {
-
-    my $new_opts  = $options_sets[ $i ][0];
-    my $meth_opts = $options_sets[ $i ][1];
-
- foreach my $varname (sort keys %{ $name_value[ $i ] }){
-      my $er = Emacs::Run->new( $new_opts );
-      my $result = $er->$method( $varname, $meth_opts );
-      my $expected = $name_value[ $i ]->{ $varname };
-      my $label = get_short_label_from_name( $varname );
-      is( $result, $expected, "$test_name: $label, option set: $i" );
-    }
+  {
+    my $sub_test = "stdout_only set on object";
+    my ($er, $result);
+    $er = Emacs::Run->new({
+                           redirector => 'stdout_only',
+                          });
+    $result = $er->eval_elisp( $elisp, { redirector => 'stdout_only' });
+    ($DEBUG) && print STDERR "$sub_test, result: $result\n";
+    is( $result, $stdout_mess, "$test_name: $sub_test" );
   }
 }
 
@@ -196,7 +164,7 @@ ok(1, "Traditional: If we made it this far, we're ok."); #2
 
   # change the environment variable $HOME to point at the $mock_home
   $ENV{HOME} = $mock_home;
-  echo_home() if $DEBUG;
+  ($DEBUG) && echo_home();
 
   my $er = Emacs::Run->new;
 
@@ -286,7 +254,7 @@ ENDFUNC2
 
   # change the environment variable $HOME to point at the $mock_home
   $ENV{HOME} = $mock_home;
-  echo_home() if $DEBUG;
+  ($DEBUG) && echo_home();
 
   my $er = Emacs::Run->new({
                             emacs_libs => [ $funclib ],
